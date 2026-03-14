@@ -1,0 +1,686 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║         🚀 PIPELINE CI/CD — CECCOFF FRONTEND (Angular 19 + Vercel)        ║
+# ║                                                                              ║
+# ║  Estratégia: Trunk-Based Development com Tags Semânticas                    ║
+# ║  Build:      Separado por ambiente via angular.json fileReplacements        ║
+# ║              environment.<env>.ts gerado em CI com secrets do GitHub        ║
+# ║  Ambientes:  DEV (independente) → HML → PRD (sequencial)                   ║
+# ║  Aprovações: Todas as etapas requerem aprovação manual                      ║
+# ║  Rollback:   Rastreia tag deployada por ambiente via GitHub Deployments API ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 🚀 Pipeline CI/CD
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🎯 TRIGGERS
+# ─────────────────────────────────────────────────────────────────────────────
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'      # v1.0.0, v2.3.1, etc.
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'    # v1.0.0-rc.1, v1.0.0-hotfix.1, etc.
+
+  workflow_dispatch:
+    inputs:
+      skip_dev:
+        description: '⏭️ Pular deploy em DEV'
+        type: boolean
+        default: false
+        required: false
+      skip_hml:
+        description: '⏭️ Pular deploy em HML (PRD não será executado)'
+        type: boolean
+        default: false
+        required: false
+      force_version:
+        description: '🏷️ Versão/Tag para forçar deploy (ex: v1.2.3). Padrão: tag atual'
+        type: string
+        required: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🔒 CONCORRÊNCIA — Evita deploys paralelos no mesmo ambiente
+# ─────────────────────────────────────────────────────────────────────────────
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🌍 VARIÁVEIS GLOBAIS
+# ─────────────────────────────────────────────────────────────────────────────
+env:
+  NODE_VERSION: '20.x'
+  APP_NAME: 'ceccoff-frontend'
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 📋 JOBS
+# ══════════════════════════════════════════════════════════════════════════════
+jobs:
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  📦 CI — Lint, testes e validação (SEM build de produção)                ║
+  # ║  O build de produção acontece individualmente em cada job de deploy,     ║
+  # ║  pois variáveis VITE_* são injetadas em tempo de build por ambiente.     ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  ci:
+    name: 📦 CI — Lint & Testes
+    runs-on: ubuntu-latest
+
+    outputs:
+      version:   ${{ steps.version.outputs.tag }}
+      sha_short: ${{ steps.version.outputs.sha }}
+
+    steps:
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🏷️ Detectar versão
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          elif [[ -n "${{ inputs.force_version }}" ]]; then
+            TAG="${{ inputs.force_version }}"
+          else
+            TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo 'v0.0.0-dev')"
+          fi
+
+          SHA="${GITHUB_SHA::7}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "### 🏷️ Versão: \`${TAG}\` — SHA: \`${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Instalar dependências
+        id: install
+        run: npm ci --prefer-offline
+
+      - name: 🔍 Lint & Type Check
+        id: lint
+        run: npm run lint
+
+      - name: 🧪 Testes unitários
+        id: tests
+        run: npm run test -- --watchAll=false --coverage --ci
+
+      - name: 📊 Sumário — CI
+        if: always()
+        run: |
+          echo "## 📦 Relatório CI"                                                    >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item           | Status                                             |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------------|-----------------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão      | \`${{ steps.version.outputs.tag }}\`              |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔑 SHA         | \`${{ steps.version.outputs.sha }}\`              |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔍 Lint        | $([[ '${{ steps.lint.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou')   |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🧪 Testes      | $([[ '${{ steps.tests.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 👤 Disparado por | @${{ github.actor }}                            |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📅 Data        | $(date -u '+%Y-%m-%d %H:%M:%S UTC')               |" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "> ⚠️ **Nota:** O build de produção é gerado separadamente em cada ambiente" >> "$GITHUB_STEP_SUMMARY"
+          echo "> com as variáveis de ambiente corretas (\`VITE_*\`).                  " >> "$GITHUB_STEP_SUMMARY"
+
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  🔵 DEPLOY DEV — Independente (não bloqueia HML/PRD)                    ║
+  # ║                                                                            ║
+  # ║  Build com: .env.development + secrets DEV do GitHub                     ║
+  # ║  Vars injetadas: VITE_API_URL, VITE_ENV, etc. para desenvolvimento       ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  deploy-dev:
+    name: 🔵 Deploy → DEV
+    runs-on: ubuntu-latest
+    needs: [ci]
+    if: ${{ inputs.skip_dev != true }}
+
+    environment:
+      name: dev
+      url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.ci.outputs.version != 'v0.0.0-dev' && needs.ci.outputs.version || github.sha }}
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Instalar dependências
+        run: npm ci --prefer-offline
+
+      # ── Gera environment.development.ts com os secrets corretos ─────────────
+      # Angular usa fileReplacements: este arquivo substitui environment.ts
+      # em tempo de build via angular.json configuration=development.
+      # Adicione novas propriedades aqui E em environment.ts (interface base).
+      - name: 🔧 Gerar environment.development.ts com secrets — DEV
+        run: |
+          cat > src/environments/environment.development.ts << 'EOF'
+          export const environment = {
+            name:       'development',
+            production: false,
+            apiUrl:     '${{ secrets.DEV_API_URL }}',
+            version:    '${{ needs.ci.outputs.version }}',
+          };
+          EOF
+          echo "✅ environment.development.ts gerado"
+
+      - name: 🏗️ Build Angular — DEV (ng build --configuration=development)
+        id: build
+        run: |
+          npm run build:dev
+          echo "✅ Build DEV gerado"
+          echo "**📊 Bundles DEV:**" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          du -sh dist/**/* 2>/dev/null | sort -h >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 📦 Instalar Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: 🔵 Deploy em DEV (Vercel Preview)
+        id: deploy
+        env:
+          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          DEPLOY_URL=$(vercel deploy \
+            --token="$VERCEL_TOKEN" \
+            --yes \
+            --meta version="${{ needs.ci.outputs.version }}" \
+            --meta sha="${{ needs.ci.outputs.sha_short }}" \
+            --meta environment=dev \
+            2>&1 | tail -1)
+
+          echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
+          echo "✅ Deploy DEV: ${DEPLOY_URL}"
+
+      # ── Salva a versão deployada para rastreamento de rollback ────────────────
+      - name: 💾 Registrar versão deployada em DEV
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: context.payload.deployment?.id || 0,
+              state: 'success',
+              environment_url: '${{ steps.deploy.outputs.url }}',
+              description: 'Version: ${{ needs.ci.outputs.version }}'
+            }).catch(() => {
+              // Ignora erros — o registro é best-effort
+              console.log('Deployment status registration skipped');
+            });
+
+            // Salva a versão como variável de ambiente reutilizável
+            core.exportVariable('DEPLOYED_VERSION_DEV', '${{ needs.ci.outputs.version }}');
+
+      - name: 🏥 Health Check DEV
+        id: health
+        run: |
+          URL="${{ steps.deploy.outputs.url }}"
+          STATUS="unhealthy"
+          for i in {1..6}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${URL}" || echo "000")
+            if [[ "${HTTP_CODE}" == "200" ]]; then
+              STATUS="healthy"; break
+            fi
+            echo "⏳ Tentativa ${i}/6 — HTTP ${HTTP_CODE}"; sleep 10
+          done
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+
+      - name: 📊 Sumário — Deploy DEV
+        if: always()
+        run: |
+          echo "## 🔵 Relatório Deploy — DEV"                                          >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item             | Detalhe                                          |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------------------|--------------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão        | \`${{ needs.ci.outputs.version }}\`             |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔑 SHA           | \`${{ needs.ci.outputs.sha_short }}\`           |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ⚙️ Configuração   | ng build --configuration=development           |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔗 URL           | ${{ steps.deploy.outputs.url }}                  |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏗️ Build         | $([[ '${{ steps.build.outcome }}' == 'success' ]] && echo '✅ Gerado' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏥 Health Check  | $([[ '${{ steps.health.outputs.status }}' == 'healthy' ]] && echo '✅ Saudável' || echo '⚠️ Verificar') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 👤 Aprovado por  | @${{ github.actor }}                             |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📅 Deploy em     | $(date -u '+%Y-%m-%d %H:%M:%S UTC')              |" >> "$GITHUB_STEP_SUMMARY"
+
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  🟡 DEPLOY HML — Independente de DEV                                     ║
+  # ║                                                                            ║
+  # ║  Build com: variáveis de staging (VITE_API_URL de HML, etc.)             ║
+  # ║  Salva a tag atual antes de deployar (usada pelo Rollback)               ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  deploy-hml:
+    name: 🟡 Deploy → HML
+    runs-on: ubuntu-latest
+    needs: [ci]
+    if: ${{ inputs.skip_hml != true }}
+
+    environment:
+      name: hml
+      url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.ci.outputs.version != 'v0.0.0-dev' && needs.ci.outputs.version || github.sha }}
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Instalar dependências
+        run: npm ci --prefer-offline
+
+      # ── Captura a versão ATUAL de HML antes de sobrescrever (para rollback) ──
+      - name: 💾 Registrar versão anterior de HML (snapshot pré-deploy)
+        id: snapshot
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Busca o último deployment bem-sucedido em HML
+            const deployments = await github.rest.repos.listDeployments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              environment: 'hml',
+              per_page: 5
+            }).catch(() => ({ data: [] }));
+
+            let prevVersion = 'none';
+            let prevUrl = '';
+
+            for (const dep of deployments.data) {
+              const statuses = await github.rest.repos.listDeploymentStatuses({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                deployment_id: dep.id,
+                per_page: 1
+              }).catch(() => ({ data: [] }));
+
+              const latest = statuses.data[0];
+              if (latest?.state === 'success') {
+                prevVersion = dep.description?.replace('Version: ', '') || dep.ref;
+                prevUrl = latest.environment_url || '';
+                break;
+              }
+            }
+
+            core.setOutput('prev_version', prevVersion);
+            core.setOutput('prev_url', prevUrl);
+            console.log(`Versão anterior em HML: ${prevVersion}`);
+
+      - name: 🔧 Gerar environment.staging.ts com secrets — HML
+        run: |
+          cat > src/environments/environment.staging.ts << 'EOF'
+          export const environment = {
+            name:       'staging',
+            production: false,
+            apiUrl:     '${{ secrets.HML_API_URL }}',
+            version:    '${{ needs.ci.outputs.version }}',
+          };
+          EOF
+          echo "✅ environment.staging.ts gerado"
+
+      - name: 🏗️ Build Angular — HML (ng build --configuration=staging)
+        id: build
+        run: |
+          npm run build:staging
+          echo "✅ Build HML gerado"
+          echo "**📊 Bundles HML:**" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          du -sh dist/**/* 2>/dev/null | sort -h >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 📦 Instalar Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: 🟡 Deploy em HML (Vercel Preview)
+        id: deploy
+        env:
+          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          DEPLOY_URL=$(vercel deploy \
+            --token="$VERCEL_TOKEN" \
+            --yes \
+            --meta version="${{ needs.ci.outputs.version }}" \
+            --meta sha="${{ needs.ci.outputs.sha_short }}" \
+            --meta environment=hml \
+            --meta prev_version="${{ steps.snapshot.outputs.prev_version }}" \
+            2>&1 | tail -1)
+
+          echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
+          echo "✅ Deploy HML: ${DEPLOY_URL}"
+
+          # Alias estável para HML
+          vercel alias set "${DEPLOY_URL}" "hml-${{ env.APP_NAME }}.vercel.app" \
+            --token="$VERCEL_TOKEN" --yes 2>/dev/null || true
+
+      # ── Salva deployment no histórico (usado pelo Rollback para detectar versão) ─
+      - name: 💾 Registrar versão deployada em HML
+        id: register
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: '${{ needs.ci.outputs.version }}',
+              environment: 'hml',
+              description: 'Version: ${{ needs.ci.outputs.version }}',
+              auto_merge: false,
+              required_contexts: []
+            });
+
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: 'success',
+              environment_url: '${{ steps.deploy.outputs.url }}',
+              description: 'Version: ${{ needs.ci.outputs.version }}'
+            });
+
+            core.setOutput('deployment_id', deployment.data.id);
+            console.log(`Deployment registrado: ID ${deployment.data.id}`);
+
+      - name: 🏥 Health Check HML
+        id: health
+        run: |
+          URL="${{ steps.deploy.outputs.url }}"
+          STATUS="unhealthy"
+          for i in {1..10}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "${URL}" || echo "000")
+            if [[ "${HTTP_CODE}" == "200" ]]; then
+              STATUS="healthy"; break
+            fi
+            echo "⏳ Tentativa ${i}/10 — HTTP ${HTTP_CODE}"; sleep 15
+          done
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+          [[ "${STATUS}" == "healthy" ]] || exit 1
+
+      - name: 📊 Sumário — Deploy HML
+        if: always()
+        run: |
+          echo "## 🟡 Relatório Deploy — HML"                                          >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item              | Detalhe                                         |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------------------|-------------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão         | \`${{ needs.ci.outputs.version }}\`            |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔑 SHA            | \`${{ needs.ci.outputs.sha_short }}\`          |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ⚙️ Configuração    | ng build --configuration=staging              |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📦 Versão anterior| \`${{ steps.snapshot.outputs.prev_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔗 URL            | ${{ steps.deploy.outputs.url }}                 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏗️ Build          | $([[ '${{ steps.build.outcome }}' == 'success' ]] && echo '✅ Gerado' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏥 Health Check   | $([[ '${{ steps.health.outputs.status }}' == 'healthy' ]] && echo '✅ Saudável' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 👤 Aprovado por   | @${{ github.actor }}                            |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📅 Deploy em      | $(date -u '+%Y-%m-%d %H:%M:%S UTC')             |" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "> 💡 Approve a verificação HML abaixo para liberar o deploy em PRD."   >> "$GITHUB_STEP_SUMMARY"
+          echo "> ↩️ Para rollback: workflow **↩️ Rollback** → versão anterior será \`${{ steps.snapshot.outputs.prev_version }}\`." >> "$GITHUB_STEP_SUMMARY"
+
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  ✅ VERIFICAÇÃO HML — Gate de qualidade pós-deploy                       ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  verify-hml:
+    name: ✅ Verificação HML — Aprovar para liberar PRD
+    runs-on: ubuntu-latest
+    needs: [ci, deploy-hml]
+    if: ${{ needs.deploy-hml.result == 'success' }}
+
+    environment:
+      name: hml-verify
+
+    steps:
+      - name: 🔍 Gate — aguardando verificação da equipe
+        run: |
+          echo "## ✅ Gate de Verificação — HML"                                       >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "Versão **\`${{ needs.ci.outputs.version }}\`** está live em HML."      >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ação           | Resultado                                          |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------------|----------------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ✅ **APROVAR** | Libera deploy em PRD automaticamente               |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ❌ **REJEITAR**| Execute workflow **↩️ Rollback** → ambiente \`hml\` |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 🎯 HML aprovada — registrando autorização para PRD
+        run: |
+          echo "✅ HML aprovada por @${{ github.actor }} em $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
+          echo "🚀 Deploy em PRD será iniciado."                                                   >> "$GITHUB_STEP_SUMMARY"
+
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  🔴 DEPLOY PRD — Depende de verify-hml com sucesso                      ║
+  # ║                                                                            ║
+  # ║  Build com: variáveis de produção (VITE_API_URL de PRD, etc.)            ║
+  # ║  Salva a tag atual antes de deployar (usada pelo Rollback)               ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  deploy-prd:
+    name: 🔴 Deploy → PRD
+    runs-on: ubuntu-latest
+    needs: [ci, verify-hml]
+    if: ${{ needs.verify-hml.result == 'success' }}
+
+    environment:
+      name: prd
+      url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.ci.outputs.version != 'v0.0.0-dev' && needs.ci.outputs.version || github.sha }}
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Instalar dependências
+        run: npm ci --prefer-offline
+
+      # ── Captura a versão ATUAL de PRD antes de sobrescrever (para rollback) ──
+      - name: 💾 Registrar versão anterior de PRD (snapshot pré-deploy)
+        id: snapshot
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deployments = await github.rest.repos.listDeployments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              environment: 'prd',
+              per_page: 5
+            }).catch(() => ({ data: [] }));
+
+            let prevVersion = 'none';
+            let prevUrl = '';
+
+            for (const dep of deployments.data) {
+              const statuses = await github.rest.repos.listDeploymentStatuses({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                deployment_id: dep.id,
+                per_page: 1
+              }).catch(() => ({ data: [] }));
+
+              const latest = statuses.data[0];
+              if (latest?.state === 'success') {
+                prevVersion = dep.description?.replace('Version: ', '') || dep.ref;
+                prevUrl = latest.environment_url || '';
+                break;
+              }
+            }
+
+            core.setOutput('prev_version', prevVersion);
+            core.setOutput('prev_url', prevUrl);
+            console.log(`Versão anterior em PRD: ${prevVersion}`);
+
+      - name: 🔧 Gerar environment.production.ts com secrets — PRD
+        run: |
+          cat > src/environments/environment.production.ts << 'EOF'
+          export const environment = {
+            name:       'production',
+            production: true,
+            apiUrl:     '${{ secrets.PRD_API_URL }}',
+            version:    '${{ needs.ci.outputs.version }}',
+          };
+          EOF
+          echo "✅ environment.production.ts gerado"
+
+      - name: 🏗️ Build Angular — PRD (ng build --configuration=production)
+        id: build
+        run: |
+          npm run build:prod
+          echo "✅ Build PRD gerado"
+          echo "**📊 Bundles PRD:**" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          du -sh dist/**/* 2>/dev/null | sort -h >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 📦 Instalar Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: 🔴 Deploy em PRD (Vercel Production)
+        id: deploy
+        env:
+          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          DEPLOY_URL=$(vercel deploy \
+            --token="$VERCEL_TOKEN" \
+            --yes \
+            --prod \
+            --meta version="${{ needs.ci.outputs.version }}" \
+            --meta sha="${{ needs.ci.outputs.sha_short }}" \
+            --meta environment=prd \
+            --meta prev_version="${{ steps.snapshot.outputs.prev_version }}" \
+            2>&1 | tail -1)
+
+          echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
+          echo "✅ Deploy PRD: ${DEPLOY_URL}"
+
+      # ── Salva deployment no histórico (usado pelo Rollback) ───────────────────
+      - name: 💾 Registrar versão deployada em PRD
+        id: register
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: '${{ needs.ci.outputs.version }}',
+              environment: 'prd',
+              description: 'Version: ${{ needs.ci.outputs.version }}',
+              auto_merge: false,
+              required_contexts: []
+            });
+
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: 'success',
+              environment_url: '${{ steps.deploy.outputs.url }}',
+              description: 'Version: ${{ needs.ci.outputs.version }}'
+            });
+
+            core.setOutput('deployment_id', deployment.data.id);
+            console.log(`Deployment PRD registrado: ID ${deployment.data.id}`);
+
+      - name: 🏥 Health Check PRD
+        id: health
+        run: |
+          URL="${{ steps.deploy.outputs.url }}"
+          STATUS="unhealthy"
+          for i in {1..10}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "${URL}" || echo "000")
+            if [[ "${HTTP_CODE}" == "200" ]]; then
+              STATUS="healthy"; break
+            fi
+            echo "⏳ Tentativa ${i}/10 — HTTP ${HTTP_CODE}"; sleep 15
+          done
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+          if [[ "${STATUS}" == "unhealthy" ]]; then
+            echo "❌ Health check PRD falhou — considere rollback imediato!"; exit 1
+          fi
+
+      - name: 📊 Sumário — Deploy PRD
+        if: always()
+        run: |
+          echo "## 🔴 Relatório Deploy — PRODUÇÃO"                                     >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item              | Detalhe                                         |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------------------|-------------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão         | \`${{ needs.ci.outputs.version }}\`            |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔑 SHA            | \`${{ needs.ci.outputs.sha_short }}\`          |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ⚙️ Configuração    | ng build --configuration=production           |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📦 Versão anterior| \`${{ steps.snapshot.outputs.prev_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔗 URL            | ${{ steps.deploy.outputs.url }}                 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏗️ Build          | $([[ '${{ steps.build.outcome }}' == 'success' ]] && echo '✅ Gerado' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏥 Health Check   | $([[ '${{ steps.health.outputs.status }}' == 'healthy' ]] && echo '✅ Saudável' || echo '❌ CRÍTICO') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 👤 Aprovado por   | @${{ github.actor }}                            |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📅 Deploy em      | $(date -u '+%Y-%m-%d %H:%M:%S UTC')             |" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "> 💡 Approve a verificação final abaixo para encerrar o ciclo."        >> "$GITHUB_STEP_SUMMARY"
+          echo "> ↩️ Para rollback: workflow **↩️ Rollback** → versão anterior será \`${{ steps.snapshot.outputs.prev_version }}\`." >> "$GITHUB_STEP_SUMMARY"
+
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  🎯 VERIFICAÇÃO PRD — Gate final                                         ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  verify-prd:
+    name: 🎯 Verificação PRD — Finalizar com Sucesso
+    runs-on: ubuntu-latest
+    needs: [ci, deploy-dev, deploy-hml, verify-hml, deploy-prd]
+    if: ${{ needs.deploy-prd.result == 'success' }}
+
+    environment:
+      name: prd-verify
+
+    steps:
+      - name: 🔍 Gate — aguardando verificação final
+        run: |
+          echo "## 🎯 Gate de Verificação Final — PRODUÇÃO"                              >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "⚡ **Versão \`${{ needs.ci.outputs.version }}\` está LIVE em Produção!**" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ação                         | Resultado                              |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------------------------------|----------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ✅ **FINALIZAR COM SUCESSO** | Ciclo de release encerrado             |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ↩️ **APROVAR ROLLBACK**      | Execute **↩️ Rollback** → rejeite aqui |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 🎉 Release encerrado com sucesso
+        run: |
+          echo "## 🎉 Release Concluído!"                                              >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ambiente  | Status                                                  |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|------------------------------------------------------   |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔵 DEV    | ${{ needs.deploy-dev.result == 'success' && '✅ Deployado' || needs.deploy-dev.result == 'skipped' && '⏭️ Pulado' || '—' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🟡 HML    | ${{ needs.deploy-hml.result == 'success' && '✅ Deployado e Verificado' || '—' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔴 PRD    | ✅ Deployado e Verificado                               |" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item              | Detalhe                                         |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------------------|-------------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão         | \`${{ needs.ci.outputs.version }}\`            |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔑 SHA            | \`${{ needs.ci.outputs.sha_short }}\`          |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 👤 Finalizado por | @${{ github.actor }}                            |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📅 Encerrado em   | $(date -u '+%Y-%m-%d %H:%M:%S UTC')             |" >> "$GITHUB_STEP_SUMMARY"
