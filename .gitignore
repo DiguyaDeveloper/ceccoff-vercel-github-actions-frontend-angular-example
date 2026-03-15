@@ -43,3 +43,4 @@ Thumbs.db
 # src/environments/environment.development.ts  ← commitar (placeholder)
 # src/environments/environment.staging.ts      ← commitar (placeholder)
 # src/environments/environment.production.ts   ← commitar (placeholder)
+.vercel

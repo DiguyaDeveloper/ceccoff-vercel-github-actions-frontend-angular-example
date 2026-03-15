@@ -107,7 +107,39 @@ jobs:
 
       - name: 🧪 Testes unitários
         id: tests
-        run: npm run test -- --watchAll=false --coverage --ci
+        run: npm run test:ci
+
+      - name: 📈 Publicar cobertura no sumário
+        if: always()
+        run: |
+          SUMMARY_FILE="coverage/coverage-summary.json"
+          if [[ -f "$SUMMARY_FILE" ]]; then
+            STMTS=$(jq '.total.statements.pct' "$SUMMARY_FILE")
+            BRANCH=$(jq '.total.branches.pct'  "$SUMMARY_FILE")
+            FUNCS=$(jq  '.total.functions.pct'  "$SUMMARY_FILE")
+            LINES=$(jq  '.total.lines.pct'      "$SUMMARY_FILE")
+
+            echo "## 📈 Coverage Report"                                         >> "$GITHUB_STEP_SUMMARY"
+            echo ""                                                               >> "$GITHUB_STEP_SUMMARY"
+            echo "| Métrica     | Cobertura                                     |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|-------------|-----------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Statements  | ${STMTS}%                                     |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Branches    | ${BRANCH}%                                    |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Functions   | ${FUNCS}%                                     |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Lines       | ${LINES}%                                     |" >> "$GITHUB_STEP_SUMMARY"
+            echo ""                                                               >> "$GITHUB_STEP_SUMMARY"
+            echo "> Relatório HTML disponível como artefato."                    >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ coverage-summary.json não encontrado."                     >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 📦 Upload relatório de coverage (artefato)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ steps.version.outputs.sha }}
+          path: coverage/
+          retention-days: 14
 
       - name: 📊 Sumário — CI
         if: always()
