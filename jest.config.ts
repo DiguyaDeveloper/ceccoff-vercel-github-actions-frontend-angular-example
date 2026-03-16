@@ -7,7 +7,7 @@ const config: Config = {
   preset: 'jest-preset-angular',
 
   // ── Setup ─────────────────────────────────────────────────────────────────
-  setupFilesAfterFramework: ['<rootDir>/setup-jest.ts'],
+  setupFilesAfterEnv: ['<rootDir>/setup-jest.ts'],
 
   // ── Ambiente ──────────────────────────────────────────────────────────────
   // jsdom simula o DOM do browser — necessário para renderizar componentes.
