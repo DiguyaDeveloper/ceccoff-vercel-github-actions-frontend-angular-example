@@ -1,7 +1,5 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// setup-jest.ts
-//
-// Executado uma vez antes de cada suite de testes (setupFilesAfterFramework).
-// jest-preset-angular precisa deste import para inicializar o ambiente Angular.
-// ─────────────────────────────────────────────────────────────────────────────
-import 'jest-preset-angular/setup-jest';
+// jest-preset-angular v14+ — padrão da comunidade
+// Ref: https://thymikee.github.io/jest-preset-angular/docs/getting-started/installation
+import { setupZoneTestEnv } from 'jest-preset-angular/setup-env/zone';
+
+setupZoneTestEnv();
