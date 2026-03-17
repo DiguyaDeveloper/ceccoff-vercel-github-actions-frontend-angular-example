@@ -997,7 +997,7 @@ jobs:
   execute-rollback-prd:
     name: 🔁 Rollback PRD → ${{ needs.deploy-prd.outputs.prev_version }}
     runs-on: ubuntu-latest
-    needs: [ci, deploy-prd, verify-prd, confirm-rollback-prd]
+    needs: [ci, deploy-prd, confirm-rollback-prd]
     if: needs.confirm-rollback-prd.result == 'success'
     permissions:
       deployments: write
