@@ -182,7 +182,7 @@ jobs:
     if: ${{ needs.detect-version.outputs.can_rollback == 'true' }}
 
     environment:
-      name: rollback-${{ inputs.environment }}
+      name: Rollback - ${{ inputs.environment }}
 
     steps:
       - name: 🔐 Rollback autorizado — executando
@@ -211,7 +211,7 @@ jobs:
       contents: read
 
     environment:
-      name: dev
+      name: DEV - Deploy
       url: ${{ steps.deploy.outputs.url }}
 
     steps:
@@ -364,7 +364,7 @@ jobs:
       contents: read
 
     environment:
-      name: hml
+      name: HML - Deploy
       url: ${{ steps.deploy.outputs.url }}
 
     steps:
@@ -526,7 +526,7 @@ jobs:
       contents: read
 
     environment:
-      name: prd
+      name: PRD - Deploy
       url: ${{ steps.deploy.outputs.url }}
 
     steps:

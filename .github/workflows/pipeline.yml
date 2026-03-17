@@ -170,7 +170,7 @@ jobs:
       contents: read
 
     environment:
-      name: dev
+      name: DEV - Deploy
       url: ${{ steps.deploy.outputs.url }}
 
     steps:
@@ -328,7 +328,7 @@ jobs:
     if: ${{ needs.deploy-dev.result == 'success' }}
 
     environment:
-      name: dev-verify
+      name: DEV - Verificar
 
     steps:
       - name: 🔍 Gate — aguardando verificação DEV
@@ -359,7 +359,7 @@ jobs:
       contents: read
 
     environment:
-      name: hml
+      name: HML - Deploy
       url: ${{ steps.deploy.outputs.url }}
 
     steps:
@@ -561,7 +561,7 @@ jobs:
     if: ${{ needs.deploy-hml.result == 'success' }}
 
     environment:
-      name: hml-verify
+      name: HML - Liberar PRD
 
     steps:
       - name: 🔍 Gate — aguardando verificação da equipe
@@ -666,7 +666,7 @@ jobs:
       contents: read
 
     environment:
-      name: prd
+      name: PRD - Deploy
       url: ${{ steps.deploy.outputs.url }}
 
     steps:
@@ -866,7 +866,7 @@ jobs:
     if: ${{ needs.deploy-prd.result == 'success' }}
 
     environment:
-      name: prd-verify
+      name: PRD - Finalizar Release
 
     steps:
       - name: 🔍 Gate — aguardando verificação final
