@@ -160,35 +160,13 @@ jobs:
 
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🔐 APROVAÇÃO DEV — Gate antes do deploy                                ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
-  approve-dev:
-    name: 🔐 Aprovar Deploy → DEV
-    runs-on: ubuntu-latest
-    needs: [ci]
-    if: ${{ inputs.skip_dev != true }}
-
-    environment:
-      name: approve-dev
-
-    steps:
-      - name: 🔐 Deploy DEV autorizado
-        run: |
-          echo "## 🔐 Deploy DEV Autorizado"                                           >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item     | Detalhe                                                 |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|---------------------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Versão   | \`${{ needs.ci.outputs.version }}\`                     |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Aprovado | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |" >> "$GITHUB_STEP_SUMMARY"
-
-
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🔵 DEPLOY DEV                                                           ║
+  # ║  🔵 DEPLOY DEV — Aprovação integrada no próprio job via environment gate ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-dev:
     name: 🔵 Deploy → DEV
     runs-on: ubuntu-latest
-    needs: [ci, approve-dev]
-    if: ${{ needs.approve-dev.result == 'success' }}
+    needs: [ci]
+    if: ${{ inputs.skip_dev != true }}
     permissions:
       deployments: write
       contents: read
@@ -373,35 +351,13 @@ jobs:
 
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🔐 APROVAÇÃO HML — Gate antes do deploy                                ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
-  approve-hml:
-    name: 🔐 Aprovar Deploy → HML
-    runs-on: ubuntu-latest
-    needs: [ci]
-    if: ${{ inputs.skip_hml != true }}
-
-    environment:
-      name: approve-hml
-
-    steps:
-      - name: 🔐 Deploy HML autorizado
-        run: |
-          echo "## 🔐 Deploy HML Autorizado"                                           >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item     | Detalhe                                                 |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|---------------------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Versão   | \`${{ needs.ci.outputs.version }}\`                     |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Aprovado | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |" >> "$GITHUB_STEP_SUMMARY"
-
-
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🟡 DEPLOY HML                                                           ║
+  # ║  🟡 DEPLOY HML — Aprovação integrada no próprio job via environment gate ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-hml:
     name: 🟡 Deploy → HML
     runs-on: ubuntu-latest
-    needs: [ci, approve-hml]
-    if: ${{ needs.approve-hml.result == 'success' }}
+    needs: [ci]
+    if: ${{ inputs.skip_hml != true }}
     permissions:
       deployments: write
       contents: read
