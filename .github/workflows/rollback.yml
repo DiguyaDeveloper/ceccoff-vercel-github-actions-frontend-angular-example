@@ -207,6 +207,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [detect-version, approve-rollback]
     if: ${{ inputs.environment == 'hml' && needs.approve-rollback.result == 'success' }}
+    permissions:
+      deployments: write
+      contents: read
 
     environment:
       name: hml
@@ -340,6 +343,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [detect-version, approve-rollback]
     if: ${{ inputs.environment == 'prd' && needs.approve-rollback.result == 'success' }}
+    permissions:
+      deployments: write
+      contents: read
 
     environment:
       name: prd

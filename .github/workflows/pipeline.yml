@@ -170,6 +170,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [ci]
     if: ${{ inputs.skip_dev != true }}
+    permissions:
+      deployments: write
+      contents: read
 
     environment:
       name: dev
@@ -299,6 +302,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [ci]
     if: ${{ inputs.skip_hml != true }}
+    permissions:
+      deployments: write
+      contents: read
 
     environment:
       name: hml
@@ -509,6 +515,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [ci, verify-hml]
     if: ${{ needs.verify-hml.result == 'success' }}
+    permissions:
+      deployments: write
+      contents: read
 
     environment:
       name: prd
