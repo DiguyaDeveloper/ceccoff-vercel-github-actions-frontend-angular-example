@@ -229,13 +229,23 @@ jobs:
           VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          DEPLOY_URL=$(vercel deploy \
+          DEPLOY_OUTPUT=$(vercel deploy \
             --token="$VERCEL_TOKEN" \
             --yes \
             --meta version="${{ needs.ci.outputs.version }}" \
             --meta sha="${{ needs.ci.outputs.sha_short }}" \
             --meta environment=dev \
-            2>/dev/null | tail -1)
+            2>&1)
+
+          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -E '^https://' | tail -1)
+
+          if [[ -z "$DEPLOY_URL" ]]; then
+            echo "❌ Vercel não retornou URL. Output completo:"
+            echo "$DEPLOY_OUTPUT"
+            echo ""
+            echo "Verifique os secrets: VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID"
+            exit 1
+          fi
 
           echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
           echo "✅ Deploy DEV: ${DEPLOY_URL}"
@@ -394,14 +404,24 @@ jobs:
           VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          DEPLOY_URL=$(vercel deploy \
+          DEPLOY_OUTPUT=$(vercel deploy \
             --token="$VERCEL_TOKEN" \
             --yes \
             --meta version="${{ needs.ci.outputs.version }}" \
             --meta sha="${{ needs.ci.outputs.sha_short }}" \
             --meta environment=hml \
             --meta prev_version="${{ steps.snapshot.outputs.prev_version }}" \
-            2>/dev/null | tail -1)
+            2>&1)
+
+          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -E '^https://' | tail -1)
+
+          if [[ -z "$DEPLOY_URL" ]]; then
+            echo "❌ Vercel não retornou URL. Output completo:"
+            echo "$DEPLOY_OUTPUT"
+            echo ""
+            echo "Verifique os secrets: VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID"
+            exit 1
+          fi
 
           echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
           echo "✅ Deploy HML: ${DEPLOY_URL}"
@@ -606,7 +626,7 @@ jobs:
           VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          DEPLOY_URL=$(vercel deploy \
+          DEPLOY_OUTPUT=$(vercel deploy \
             --token="$VERCEL_TOKEN" \
             --yes \
             --prod \
@@ -614,7 +634,17 @@ jobs:
             --meta sha="${{ needs.ci.outputs.sha_short }}" \
             --meta environment=prd \
             --meta prev_version="${{ steps.snapshot.outputs.prev_version }}" \
-            2>/dev/null | tail -1)
+            2>&1)
+
+          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -E '^https://' | tail -1)
+
+          if [[ -z "$DEPLOY_URL" ]]; then
+            echo "❌ Vercel não retornou URL. Output completo:"
+            echo "$DEPLOY_OUTPUT"
+            echo ""
+            echo "Verifique os secrets: VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID"
+            exit 1
+          fi
 
           echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
           echo "✅ Deploy PRD: ${DEPLOY_URL}"

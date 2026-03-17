@@ -260,7 +260,7 @@ jobs:
           VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          DEPLOY_URL=$(vercel deploy \
+          DEPLOY_OUTPUT=$(vercel deploy \
             --token="$VERCEL_TOKEN" \
             --yes \
             --meta version="${{ needs.detect-version.outputs.target_version }}" \
@@ -268,7 +268,15 @@ jobs:
             --meta rollback=true \
             --meta rollback_from="${{ needs.detect-version.outputs.current_version }}" \
             --meta rollback_reason="${{ inputs.reason }}" \
-            2>/dev/null | tail -1)
+            2>&1)
+
+          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -E '^https://' | tail -1)
+
+          if [[ -z "$DEPLOY_URL" ]]; then
+            echo "❌ Vercel não retornou URL. Output completo:"
+            echo "$DEPLOY_OUTPUT"
+            exit 1
+          fi
 
           echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
           echo "✅ Rollback HML deployado: ${DEPLOY_URL}"
@@ -396,7 +404,7 @@ jobs:
           VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          DEPLOY_URL=$(vercel deploy \
+          DEPLOY_OUTPUT=$(vercel deploy \
             --token="$VERCEL_TOKEN" \
             --yes \
             --prod \
@@ -405,7 +413,15 @@ jobs:
             --meta rollback=true \
             --meta rollback_from="${{ needs.detect-version.outputs.current_version }}" \
             --meta rollback_reason="${{ inputs.reason }}" \
-            2>/dev/null | tail -1)
+            2>&1)
+
+          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -E '^https://' | tail -1)
+
+          if [[ -z "$DEPLOY_URL" ]]; then
+            echo "❌ Vercel não retornou URL. Output completo:"
+            echo "$DEPLOY_OUTPUT"
+            exit 1
+          fi
 
           echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
           echo "✅ Rollback PRD deployado: ${DEPLOY_URL}"
