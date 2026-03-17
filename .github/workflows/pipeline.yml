@@ -874,17 +874,29 @@ jobs:
       name: PRD - Finalizar Release
 
     steps:
-      - name: 🔍 Gate — aguardando verificação final
+      - name: 🔍 Gate — aguardando aprovação final
         run: |
           echo "## 🎯 Gate de Verificação Final — PRODUÇÃO"                               >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                          >> "$GITHUB_STEP_SUMMARY"
           echo "⚡ **Versão \`${{ needs.ci.outputs.version }}\` está LIVE em Produção!**" >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                          >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ação                         | Resultado                               |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ação                         | Próximo step                            |" >> "$GITHUB_STEP_SUMMARY"
           echo "|------------------------------|-----------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| ✅ **FINALIZAR COM SUCESSO** | Notifica Slack ✅ e encerra o ciclo      |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| ❌ **REJEITAR (ROLLBACK)**   | Notifica Slack 🚨 — execute ↩️ Rollback  |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ✅ **APROVAR**               | 🎉 Notifica Slack sucesso + encerra      |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ❌ **REJEITAR**              | ⏪ Abre gate de confirmação de Rollback  |" >> "$GITHUB_STEP_SUMMARY"
 
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  🎉 NOTIFICAR SLACK — PRD com Sucesso (raia de sucesso)                  ║
+  # ║                                                                            ║
+  # ║  Raia 1/2 pós verify-prd: executa quando o gate é APROVADO.              ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  notify-prd-success:
+    name: 🎉 Notificar Slack — PRD com Sucesso
+    runs-on: ubuntu-latest
+    needs: [ci, deploy-hml, deploy-prd, verify-prd]
+    if: needs.verify-prd.result == 'success'
+
+    steps:
       - name: 📣 [FAKE] Notificar Slack — Deploy PRD SUCESSO
         run: |
           VERSION="${{ needs.ci.outputs.version }}"
@@ -892,7 +904,6 @@ jobs:
           ACTOR="${{ github.actor }}"
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
 
-          # ── Simula payload de sucesso ────────────────────────────────────────
           cat << SLACK
           {
             "channel": "#deployments",
@@ -935,7 +946,7 @@ jobs:
           echo "> 📣 Notificação de sucesso enviada ao Slack."                         >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  ⏪ CONFIRMAR ROLLBACK PRD                                               ║
+  # ║  ⏪ CONFIRMAR ROLLBACK PRD (raia de rollback)                            ║
   # ║                                                                            ║
   # ║  Acionado automaticamente quando verify-prd é REJEITADO (cancelled).     ║
   # ║                                                                            ║
@@ -1177,29 +1188,22 @@ jobs:
   finalize-pipeline:
     name: 🏁 Encerrar Pipeline — Cancelar Steps Pendentes
     runs-on: ubuntu-latest
-    needs: [deploy-prd, verify-prd, execute-rollback-prd]
-    if: |
-      always() &&
-      needs.deploy-prd.result == 'success' &&
-      (
-        needs.verify-prd.result == 'success' ||
-        needs.execute-rollback-prd.result == 'success' ||
-        needs.execute-rollback-prd.result == 'failure' ||
-        (
-          needs.verify-prd.result == 'cancelled' &&
-          needs.execute-rollback-prd.result == 'skipped'
-        )
-      )
+    # Ponto de convergência das duas raias pós-PRD:
+    #   raia sucesso  → notify-prd-success
+    #   raia rollback → execute-rollback-prd
+    # Ambas têm estado terminal em todos os cenários → job sempre avança.
+    needs: [deploy-prd, notify-prd-success, execute-rollback-prd]
+    if: always() && needs.deploy-prd.result == 'success'
     permissions:
       actions: write
 
     steps:
       - name: 🏁 Sumário — Pipeline PRD encerrado
         run: |
-          VERIFY_RESULT="${{ needs.verify-prd.result }}"
+          SUCCESS_RESULT="${{ needs.notify-prd-success.result }}"
           ROLLBACK_RESULT="${{ needs.execute-rollback-prd.result }}"
 
-          if [[ "${VERIFY_RESULT}" == "success" ]]; then
+          if [[ "${SUCCESS_RESULT}" == "success" ]]; then
             OUTCOME="✅ Release PRD aprovado com sucesso"
           elif [[ "${ROLLBACK_RESULT}" == "success" ]]; then
             OUTCOME="⏪ Rollback PRD executado com sucesso"
