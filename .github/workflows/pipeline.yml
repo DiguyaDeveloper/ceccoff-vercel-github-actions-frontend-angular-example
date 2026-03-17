@@ -222,31 +222,45 @@ jobs:
       - name: 📦 Instalar Vercel CLI
         run: npm install -g vercel@latest
 
+      - name: 🗂️ Criar estrutura Vercel Build Output (prebuilt)
+        run: |
+          mkdir -p .vercel/output/static
+          cp -r dist/ceccoff-frontend/browser/. .vercel/output/static/
+          cat > .vercel/output/config.json << 'VCEOF'
+          {
+            "version": 3,
+            "routes": [
+              {"src":"/assets/(.*)","headers":{"cache-control":"public, max-age=31536000, immutable"},"continue":true},
+              {"src":"/(.*)\\.js","headers":{"cache-control":"public, max-age=31536000, immutable"},"continue":true},
+              {"src":"/(.*)\\.css","headers":{"cache-control":"public, max-age=31536000, immutable"},"continue":true},
+              {"src":"/index\\.html","headers":{"cache-control":"no-cache, no-store, must-revalidate"},"continue":true},
+              {"handle":"filesystem"},
+              {"src":"/(.*)","dest":"/index.html"}
+            ]
+          }
+          VCEOF
+          echo "✅ Vercel Build Output pronto em .vercel/output/"
+
       - name: 🔵 Deploy em DEV (Vercel Preview)
         id: deploy
         env:
           VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
         run: |
-          DEPLOY_OUTPUT=$(vercel deploy \
+          DEPLOY_URL=$(vercel deploy --prebuilt \
             --token="$VERCEL_TOKEN" \
             --yes \
             --meta version="${{ needs.ci.outputs.version }}" \
             --meta sha="${{ needs.ci.outputs.sha_short }}" \
             --meta environment=dev \
-            2>&1)
-
-          echo "--- Vercel output ---"
-          echo "$DEPLOY_OUTPUT"
-          echo "--- End output ---"
-          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://[^ ]+' | grep -v 'inspect' | tail -1)
+            2>/dev/null)
 
           if [[ -z "$DEPLOY_URL" ]]; then
-            echo "❌ Vercel não retornou URL. Output completo:"
-            echo "$DEPLOY_OUTPUT"
+            echo "❌ Vercel não retornou URL. Output de diagnóstico:"
+            vercel deploy --prebuilt --token="$VERCEL_TOKEN" --yes --meta environment=dev 2>&1 || true
             echo ""
-            echo "Verifique os secrets: VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID"
+            echo "Verifique os secrets: VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID_DEV"
             exit 1
           fi
 
@@ -400,41 +414,51 @@ jobs:
       - name: 📦 Instalar Vercel CLI
         run: npm install -g vercel@latest
 
+      - name: 🗂️ Criar estrutura Vercel Build Output (prebuilt)
+        run: |
+          mkdir -p .vercel/output/static
+          cp -r dist/ceccoff-frontend/browser/. .vercel/output/static/
+          cat > .vercel/output/config.json << 'VCEOF'
+          {
+            "version": 3,
+            "routes": [
+              {"src":"/assets/(.*)","headers":{"cache-control":"public, max-age=31536000, immutable"},"continue":true},
+              {"src":"/(.*)\\.js","headers":{"cache-control":"public, max-age=31536000, immutable"},"continue":true},
+              {"src":"/(.*)\\.css","headers":{"cache-control":"public, max-age=31536000, immutable"},"continue":true},
+              {"src":"/index\\.html","headers":{"cache-control":"no-cache, no-store, must-revalidate"},"continue":true},
+              {"handle":"filesystem"},
+              {"src":"/(.*)","dest":"/index.html"}
+            ]
+          }
+          VCEOF
+          echo "✅ Vercel Build Output pronto em .vercel/output/"
+
       - name: 🟡 Deploy em HML (Vercel Preview)
         id: deploy
         env:
           VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_HML }}
         run: |
-          DEPLOY_OUTPUT=$(vercel deploy \
+          DEPLOY_URL=$(vercel deploy --prebuilt \
             --token="$VERCEL_TOKEN" \
             --yes \
             --meta version="${{ needs.ci.outputs.version }}" \
             --meta sha="${{ needs.ci.outputs.sha_short }}" \
             --meta environment=hml \
             --meta prev_version="${{ steps.snapshot.outputs.prev_version }}" \
-            2>&1)
-
-          echo "--- Vercel output ---"
-          echo "$DEPLOY_OUTPUT"
-          echo "--- End output ---"
-          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://[^ ]+' | grep -v 'inspect' | tail -1)
+            2>/dev/null)
 
           if [[ -z "$DEPLOY_URL" ]]; then
-            echo "❌ Vercel não retornou URL. Output completo:"
-            echo "$DEPLOY_OUTPUT"
+            echo "❌ Vercel não retornou URL. Output de diagnóstico:"
+            vercel deploy --prebuilt --token="$VERCEL_TOKEN" --yes --meta environment=hml 2>&1 || true
             echo ""
-            echo "Verifique os secrets: VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID"
+            echo "Verifique os secrets: VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID_HML"
             exit 1
           fi
 
           echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
           echo "✅ Deploy HML: ${DEPLOY_URL}"
-
-          # Alias estável para HML
-          vercel alias set "${DEPLOY_URL}" "hml-${{ env.APP_NAME }}.vercel.app" \
-            --token="$VERCEL_TOKEN" --yes 2>/dev/null || true
 
       # ── Salva deployment no histórico (usado pelo Rollback para detectar versão) ─
       - name: 💾 Registrar versão deployada em HML
@@ -625,33 +649,46 @@ jobs:
       - name: 📦 Instalar Vercel CLI
         run: npm install -g vercel@latest
 
+      - name: 🗂️ Criar estrutura Vercel Build Output (prebuilt)
+        run: |
+          mkdir -p .vercel/output/static
+          cp -r dist/ceccoff-frontend/browser/. .vercel/output/static/
+          cat > .vercel/output/config.json << 'VCEOF'
+          {
+            "version": 3,
+            "routes": [
+              {"src":"/assets/(.*)","headers":{"cache-control":"public, max-age=31536000, immutable"},"continue":true},
+              {"src":"/(.*)\\.js","headers":{"cache-control":"public, max-age=31536000, immutable"},"continue":true},
+              {"src":"/(.*)\\.css","headers":{"cache-control":"public, max-age=31536000, immutable"},"continue":true},
+              {"src":"/index\\.html","headers":{"cache-control":"no-cache, no-store, must-revalidate"},"continue":true},
+              {"handle":"filesystem"},
+              {"src":"/(.*)","dest":"/index.html"}
+            ]
+          }
+          VCEOF
+          echo "✅ Vercel Build Output pronto em .vercel/output/"
+
       - name: 🔴 Deploy em PRD (Vercel Production)
         id: deploy
         env:
           VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_PRD }}
         run: |
-          DEPLOY_OUTPUT=$(vercel deploy \
+          DEPLOY_URL=$(vercel deploy --prebuilt --prod \
             --token="$VERCEL_TOKEN" \
             --yes \
-            --prod \
             --meta version="${{ needs.ci.outputs.version }}" \
             --meta sha="${{ needs.ci.outputs.sha_short }}" \
             --meta environment=prd \
             --meta prev_version="${{ steps.snapshot.outputs.prev_version }}" \
-            2>&1)
-
-          echo "--- Vercel output ---"
-          echo "$DEPLOY_OUTPUT"
-          echo "--- End output ---"
-          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://[^ ]+' | grep -v 'inspect' | tail -1)
+            2>/dev/null)
 
           if [[ -z "$DEPLOY_URL" ]]; then
-            echo "❌ Vercel não retornou URL. Output completo:"
-            echo "$DEPLOY_OUTPUT"
+            echo "❌ Vercel não retornou URL. Output de diagnóstico:"
+            vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" --yes --meta environment=prd 2>&1 || true
             echo ""
-            echo "Verifique os secrets: VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID"
+            echo "Verifique os secrets: VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID_PRD"
             exit 1
           fi
 
