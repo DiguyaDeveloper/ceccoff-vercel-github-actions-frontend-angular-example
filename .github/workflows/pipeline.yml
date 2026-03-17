@@ -319,6 +319,38 @@ jobs:
           echo "| 🏥 Health Check  | $([[ '${{ steps.health.outputs.status }}' == 'healthy' ]] && echo '✅ Saudável' || echo '⚠️ Verificar') |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 👤 Aprovado por  | @${{ github.actor }}                             |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 📅 Deploy em     | $(date -u '+%Y-%m-%d %H:%M:%S UTC')              |" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "> 💡 Aprove o gate abaixo para **finalizar** o ciclo DEV."             >> "$GITHUB_STEP_SUMMARY"
+          echo "> ↩️ Para rollback: rejeite o gate e execute o workflow **↩️ Rollback** → ambiente \`dev\`." >> "$GITHUB_STEP_SUMMARY"
+
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  ✅ VERIFICAÇÃO DEV — Gate pós-deploy                                    ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  verify-dev:
+    name: ✅ Verificação DEV — Finalizar ou Rollback
+    runs-on: ubuntu-latest
+    needs: [ci, deploy-dev]
+    if: ${{ needs.deploy-dev.result == 'success' }}
+
+    environment:
+      name: dev-verify
+
+    steps:
+      - name: 🔍 Gate — aguardando verificação DEV
+        run: |
+          echo "## ✅ Gate de Verificação — DEV"                                        >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                        >> "$GITHUB_STEP_SUMMARY"
+          echo "Versão **\`${{ needs.ci.outputs.version }}\`** está live em DEV."       >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                        >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ação              | Resultado                                        |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------------------|--------------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ✅ **FINALIZAR**  | Ciclo DEV encerrado com sucesso                  |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ↩️ **ROLLBACK**   | Rejeite e execute workflow **↩️ Rollback** → dev |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 🎉 DEV finalizado com sucesso
+        run: |
+          echo "✅ DEV aprovado por @${{ github.actor }} em $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
 
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
@@ -557,20 +589,91 @@ jobs:
       - name: 🎯 HML aprovada — registrando autorização para PRD
         run: |
           echo "✅ HML aprovada por @${{ github.actor }} em $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
-          echo "🚀 Deploy em PRD será iniciado."                                                   >> "$GITHUB_STEP_SUMMARY"
+          echo "📣 Notificação Slack será enviada antes do deploy em PRD."                         >> "$GITHUB_STEP_SUMMARY"
 
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🔴 DEPLOY PRD — Depende de verify-hml com sucesso                      ║
+  # ║  📣 NOTIFICAÇÃO PRÉ-PRD — Avisa o time antes de ir a produção            ║
   # ║                                                                            ║
-  # ║  Build com: variáveis de produção (VITE_API_URL de PRD, etc.)            ║
+  # ║  Fake notifier: simula envio para Slack com output no sumário.            ║
+  # ║  Para integrar de verdade: substituir o step por webhook real.            ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  notify-pre-prd:
+    name: 📣 Notificar Slack — Deploy PRD iniciando
+    runs-on: ubuntu-latest
+    needs: [ci, verify-hml]
+    if: ${{ needs.verify-hml.result == 'success' }}
+
+    steps:
+      - name: 📣 [FAKE] Enviar notificação Slack
+        run: |
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          VERSION="${{ needs.ci.outputs.version }}"
+          SHA="${{ needs.ci.outputs.sha_short }}"
+          ACTOR="${{ github.actor }}"
+
+          # ── Simula payload que seria enviado ao Slack ────────────────────────
+          cat << SLACK
+          {
+            "channel": "#deployments",
+            "text": "🚀 *CECCOFF — Deploy PRD Iniciando*",
+            "blocks": [
+              {
+                "type": "header",
+                "text": { "type": "plain_text", "text": "🚀 Deploy em Produção" }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  { "type": "mrkdwn", "text": "*Versão:*\n\`${VERSION}\`" },
+                  { "type": "mrkdwn", "text": "*SHA:*\n\`${SHA}\`" },
+                  { "type": "mrkdwn", "text": "*Autorizado por:*\n@${ACTOR}" },
+                  { "type": "mrkdwn", "text": "*Horário:*\n${TIMESTAMP}" },
+                  { "type": "mrkdwn", "text": "*HML:*\n✅ Aprovado e verificado" },
+                  { "type": "mrkdwn", "text": "*Status:*\n⏳ Aguardando gate PRD" }
+                ]
+              }
+            ]
+          }
+          SLACK
+
+          # ── Para usar de verdade: descomente e adicione SLACK_WEBHOOK_URL ───
+          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+          #   -H 'Content-type: application/json' \
+          #   --data "{\"text\":\"🚀 Deploy PRD iniciando — versão \`${VERSION}\` autorizado por @${ACTOR}\"}"
+
+          echo "✅ [FAKE] Notificação enviada ao Slack"
+
+      - name: 📊 Sumário — Notificação PRÉ-PRD
+        run: |
+          echo "## 📣 Notificação Slack — PRÉ-PRD"                                          >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                             >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`"                                                                      >> "$GITHUB_STEP_SUMMARY"
+          echo "🚀 CECCOFF — Deploy PRD Iniciando"                                          >> "$GITHUB_STEP_SUMMARY"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "📦 Versão : ${{ needs.ci.outputs.version }}"                                >> "$GITHUB_STEP_SUMMARY"
+          echo "🔑 SHA    : ${{ needs.ci.outputs.sha_short }}"                              >> "$GITHUB_STEP_SUMMARY"
+          echo "✅ HML    : Aprovado e verificado"                                          >> "$GITHUB_STEP_SUMMARY"
+          echo "👤 Por    : @${{ github.actor }}"                                           >> "$GITHUB_STEP_SUMMARY"
+          echo "🕐 Em     : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"                           >> "$GITHUB_STEP_SUMMARY"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "⏳ Aguardando gate de aprovação PRD..."                                     >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`"                                                                      >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                             >> "$GITHUB_STEP_SUMMARY"
+          echo "> 💡 Para ativar: adicione secret \`SLACK_WEBHOOK_URL\` e descomente o curl no step acima." >> "$GITHUB_STEP_SUMMARY"
+
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  🔴 DEPLOY PRD — Depende de notify-pre-prd                              ║
+  # ║                                                                            ║
+  # ║  Build com: variáveis de produção                                        ║
   # ║  Salva a tag atual antes de deployar (usada pelo Rollback)               ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-prd:
     name: 🔴 Deploy → PRD
     runs-on: ubuntu-latest
-    needs: [ci, verify-hml]
-    if: ${{ needs.verify-hml.result == 'success' }}
+    needs: [ci, notify-pre-prd]
+    if: ${{ needs.notify-pre-prd.result == 'success' }}
     permissions:
       deployments: write
       contents: read
@@ -768,12 +871,12 @@ jobs:
 
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🎯 VERIFICAÇÃO PRD — Gate final                                         ║
+  # ║  🎯 VERIFICAÇÃO PRD — Gate final com notificação de sucesso ou falha     ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   verify-prd:
-    name: 🎯 Verificação PRD — Finalizar com Sucesso
+    name: 🎯 Verificação PRD — Finalizar ou Rollback
     runs-on: ubuntu-latest
-    needs: [ci, deploy-dev, deploy-hml, verify-hml, deploy-prd]
+    needs: [ci, deploy-dev, deploy-hml, verify-hml, notify-pre-prd, deploy-prd]
     if: ${{ needs.deploy-prd.result == 'success' }}
 
     environment:
@@ -782,14 +885,44 @@ jobs:
     steps:
       - name: 🔍 Gate — aguardando verificação final
         run: |
-          echo "## 🎯 Gate de Verificação Final — PRODUÇÃO"                              >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "## 🎯 Gate de Verificação Final — PRODUÇÃO"                               >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                          >> "$GITHUB_STEP_SUMMARY"
           echo "⚡ **Versão \`${{ needs.ci.outputs.version }}\` está LIVE em Produção!**" >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                         >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ação                         | Resultado                              |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|------------------------------|----------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| ✅ **FINALIZAR COM SUCESSO** | Ciclo de release encerrado             |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| ↩️ **APROVAR ROLLBACK**      | Execute **↩️ Rollback** → rejeite aqui |" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                          >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ação                         | Resultado                               |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------------------------------|-----------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ✅ **FINALIZAR COM SUCESSO** | Notifica Slack ✅ e encerra o ciclo      |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ❌ **REJEITAR (ROLLBACK)**   | Notifica Slack 🚨 — execute ↩️ Rollback  |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 📣 [FAKE] Notificar Slack — Deploy PRD SUCESSO
+        run: |
+          VERSION="${{ needs.ci.outputs.version }}"
+          SHA="${{ needs.ci.outputs.sha_short }}"
+          ACTOR="${{ github.actor }}"
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+          # ── Simula payload de sucesso ────────────────────────────────────────
+          cat << SLACK
+          {
+            "channel": "#deployments",
+            "text": "✅ *CECCOFF — Deploy PRD Concluído com Sucesso*",
+            "attachments": [{
+              "color": "#36a64f",
+              "fields": [
+                { "title": "Versão", "value": "${VERSION}", "short": true },
+                { "title": "SHA", "value": "${SHA}", "short": true },
+                { "title": "Aprovado por", "value": "@${ACTOR}", "short": true },
+                { "title": "Horário", "value": "${TIMESTAMP}", "short": true }
+              ]
+            }]
+          }
+          SLACK
+
+          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+          #   -H 'Content-type: application/json' \
+          #   --data "{\"text\":\"✅ Deploy PRD *${VERSION}* concluído com sucesso por @${ACTOR}\"}"
+
+          echo "✅ [FAKE] Notificação de SUCESSO enviada ao Slack"
 
       - name: 🎉 Release encerrado com sucesso
         run: |
@@ -807,3 +940,59 @@ jobs:
           echo "| 🔑 SHA            | \`${{ needs.ci.outputs.sha_short }}\`          |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 👤 Finalizado por | @${{ github.actor }}                            |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 📅 Encerrado em   | $(date -u '+%Y-%m-%d %H:%M:%S UTC')             |" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "> 📣 Notificação de sucesso enviada ao Slack."                         >> "$GITHUB_STEP_SUMMARY"
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  🚨 NOTIFICAÇÃO FALHA PRD — Executado se verify-prd for rejeitado        ║
+  # ║                                                                            ║
+  # ║  GitHub não executa jobs após rejeição de environment gate, portanto      ║
+  # ║  esta notificação é acionada pelo próprio rollback.yml ao ser disparado.  ║
+  # ║  Aqui documentamos o comportamento esperado no sumário.                   ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  notify-prd-failure:
+    name: 🚨 Notificar Slack — Rollback PRD necessário
+    runs-on: ubuntu-latest
+    needs: [ci, deploy-prd]
+    if: ${{ needs.deploy-prd.result == 'failure' }}
+
+    steps:
+      - name: 📣 [FAKE] Notificar Slack — Deploy PRD FALHOU
+        run: |
+          VERSION="${{ needs.ci.outputs.version }}"
+          SHA="${{ needs.ci.outputs.sha_short }}"
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+          cat << SLACK
+          {
+            "channel": "#deployments",
+            "text": "🚨 *CECCOFF — Deploy PRD FALHOU — Rollback necessário*",
+            "attachments": [{
+              "color": "#ff0000",
+              "fields": [
+                { "title": "Versão", "value": "${VERSION}", "short": true },
+                { "title": "SHA", "value": "${SHA}", "short": true },
+                { "title": "Horário", "value": "${TIMESTAMP}", "short": true },
+                { "title": "Ação necessária", "value": "Execute ↩️ Rollback → prd", "short": false }
+              ]
+            }]
+          }
+          SLACK
+
+          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+          #   -H 'Content-type: application/json' \
+          #   --data "{\"text\":\"🚨 Deploy PRD *${VERSION}* FALHOU — execute rollback imediatamente!\"}"
+
+          echo "🚨 [FAKE] Notificação de FALHA enviada ao Slack"
+
+      - name: 📊 Sumário — Falha PRD
+        run: |
+          echo "## 🚨 Deploy PRD FALHOU"                                               >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item    | Detalhe                                                   |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---------|-----------------------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Versão  | \`${{ needs.ci.outputs.version }}\`                       |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| SHA     | \`${{ needs.ci.outputs.sha_short }}\`                     |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Horário | $(date -u '+%Y-%m-%d %H:%M:%S UTC')                       |" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "> 🚨 Execute o workflow **↩️ Rollback** → ambiente \`prd\` imediatamente." >> "$GITHUB_STEP_SUMMARY"
