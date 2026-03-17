@@ -265,7 +265,7 @@ jobs:
             --meta rollback=true \
             --meta rollback_from="${{ needs.detect-version.outputs.current_version }}" \
             --meta rollback_reason="${{ inputs.reason }}" \
-            2>&1 | tail -1)
+            2>/dev/null | tail -1)
 
           echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
           echo "✅ Rollback HML deployado: ${DEPLOY_URL}"
@@ -399,7 +399,7 @@ jobs:
             --meta rollback=true \
             --meta rollback_from="${{ needs.detect-version.outputs.current_version }}" \
             --meta rollback_reason="${{ inputs.reason }}" \
-            2>&1 | tail -1)
+            2>/dev/null | tail -1)
 
           echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
           echo "✅ Rollback PRD deployado: ${DEPLOY_URL}"
