@@ -329,7 +329,11 @@ jobs:
           STATUS="unhealthy"
           for i in {1..8}; do
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "${URL}" || echo "000")
-            if [[ "${HTTP_CODE}" == "200" ]]; then STATUS="healthy"; break; fi
+            if [[ "${HTTP_CODE}" == "200" || "${HTTP_CODE}" == "401" ]]; then
+              STATUS="healthy"
+              [[ "${HTTP_CODE}" == "401" ]] && echo "ℹ️ HTTP 401 — preview protegido por Vercel Auth (normal em preview)"
+              break
+            fi
             echo "⏳ Tentativa ${i}/8 — HTTP ${HTTP_CODE}"; sleep 15
           done
           echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
