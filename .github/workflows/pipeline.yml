@@ -1161,3 +1161,74 @@ jobs:
           echo "| 👤 Executado por    | @${{ github.actor }}                             |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 📅 Executado em     | $(date -u '+%Y-%m-%d %H:%M:%S UTC')              |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 🏁 Resultado        | ${ICON} ${RESULT}                                |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  🏁 FINALIZAR PIPELINE — Cancela steps pendentes após PRD concluído      ║
+  # ║                                                                            ║
+  # ║  Quando o fluxo de PRD chega ao fim (sucesso ou rollback), qualquer job  ║
+  # ║  ainda aguardando aprovação (ex: verify-dev) é cancelado automaticamente  ║
+  # ║  via GitHub Actions API, encerrando o workflow run de forma limpa.        ║
+  # ║                                                                            ║
+  # ║  Casos cobertos:                                                           ║
+  # ║    • verify-prd aprovado (success)                                        ║
+  # ║    • execute-rollback-prd concluído (success ou failure)                  ║
+  # ║    • confirm-rollback-prd rejeitado → execute-rollback-prd skipped        ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  finalize-pipeline:
+    name: 🏁 Encerrar Pipeline — Cancelar Steps Pendentes
+    runs-on: ubuntu-latest
+    needs: [deploy-prd, verify-prd, execute-rollback-prd]
+    if: |
+      always() &&
+      needs.deploy-prd.result == 'success' &&
+      (
+        needs.verify-prd.result == 'success' ||
+        needs.execute-rollback-prd.result == 'success' ||
+        needs.execute-rollback-prd.result == 'failure' ||
+        (
+          needs.verify-prd.result == 'cancelled' &&
+          needs.execute-rollback-prd.result == 'skipped'
+        )
+      )
+    permissions:
+      actions: write
+
+    steps:
+      - name: 🏁 Sumário — Pipeline PRD encerrado
+        run: |
+          VERIFY_RESULT="${{ needs.verify-prd.result }}"
+          ROLLBACK_RESULT="${{ needs.execute-rollback-prd.result }}"
+
+          if [[ "${VERIFY_RESULT}" == "success" ]]; then
+            OUTCOME="✅ Release PRD aprovado com sucesso"
+          elif [[ "${ROLLBACK_RESULT}" == "success" ]]; then
+            OUTCOME="⏪ Rollback PRD executado com sucesso"
+          elif [[ "${ROLLBACK_RESULT}" == "failure" ]]; then
+            OUTCOME="🚨 Rollback PRD falhou — verifique o ambiente"
+          else
+            OUTCOME="⛔ Rollback cancelado — versão atual permanece em PRD"
+          fi
+
+          echo "## 🏁 Pipeline Encerrada"                                                  >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                           >> "$GITHUB_STEP_SUMMARY"
+          echo "**${OUTCOME}**"                                                             >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                           >> "$GITHUB_STEP_SUMMARY"
+          echo "> 🧹 Encerrando workflow run para cancelar quaisquer gates pendentes..."   >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 🧹 Cancelar workflow run (encerra verify-dev pendente)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Aguarda 5s para garantir flush de logs dos steps anteriores
+            await new Promise(r => setTimeout(r, 5000));
+            try {
+              await github.rest.actions.cancelWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: context.runId
+              });
+              console.log('✅ Workflow run cancelado — gates pendentes (ex: verify-dev) encerrados.');
+            } catch (e) {
+              // Workflow já pode estar em estado terminal se não havia gates pendentes
+              console.log('ℹ️ Workflow já encerrado ou sem gates pendentes:', e.message);
+            }
