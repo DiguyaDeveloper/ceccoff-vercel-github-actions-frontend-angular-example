@@ -17,8 +17,8 @@ name: 🚀 Pipeline CI/CD
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'      # v1.0.0, v2.3.1, etc.
-      - 'v[0-9]+.[0-9]+.[0-9]+-*'    # v1.0.0-rc.1, v1.0.0-hotfix.1, etc.
+      - 'v[0-9]+.[0-9]+.[0-9]+' # v1.0.0, v2.3.1, etc.
+      - 'v[0-9]+.[0-9]+.[0-9]+-*' # v1.0.0-rc.1, v1.0.0-hotfix.1, etc.
 
   workflow_dispatch:
     inputs:
@@ -55,7 +55,6 @@ env:
 # 📋 JOBS
 # ══════════════════════════════════════════════════════════════════════════════
 jobs:
-
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  📦 CI — Lint, testes e validação (SEM build de produção)                ║
   # ║  O build de produção acontece individualmente em cada job de deploy,     ║
@@ -66,7 +65,7 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      version:   ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.tag }}
       sha_short: ${{ steps.version.outputs.sha }}
 
     steps:
@@ -158,7 +157,6 @@ jobs:
           echo "> ⚠️ **Nota:** O build de produção é gerado separadamente em cada ambiente" >> "$GITHUB_STEP_SUMMARY"
           echo "> com as variáveis de ambiente corretas (\`VITE_*\`).                  " >> "$GITHUB_STEP_SUMMARY"
 
-
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  🔵 DEPLOY DEV — Aprovação integrada no próprio job via environment gate ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
@@ -241,8 +239,8 @@ jobs:
       - name: 🔵 Deploy em DEV (Vercel Preview)
         id: deploy
         env:
-          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
         run: |
           DEPLOY_URL=$(vercel deploy --prebuilt \
@@ -320,14 +318,13 @@ jobs:
           echo "> 💡 Aprove o gate abaixo para **finalizar** o ciclo DEV."             >> "$GITHUB_STEP_SUMMARY"
           echo "> ↩️ Para rollback: rejeite o gate e execute o workflow **↩️ Rollback** → ambiente \`dev\`." >> "$GITHUB_STEP_SUMMARY"
 
-
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  ✅ VERIFICAÇÃO DEV — Gate pós-deploy                                    ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   verify-dev:
     name: ✅ Verificação DEV — Finalizar ou Rollback
     runs-on: ubuntu-latest
-    needs: [ci, deploy-dev]
+    needs: [deploy-dev]
     if: ${{ needs.deploy-dev.result == 'success' }}
 
     environment:
@@ -348,7 +345,6 @@ jobs:
       - name: 🎉 DEV finalizado com sucesso
         run: |
           echo "✅ DEV aprovado por @${{ github.actor }} em $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
-
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  🟡 DEPLOY HML — Aprovação integrada no próprio job via environment gate ║
@@ -465,8 +461,8 @@ jobs:
       - name: 🟡 Deploy em HML (Vercel Preview)
         id: deploy
         env:
-          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_HML }}
         run: |
           DEPLOY_URL=$(vercel deploy --prebuilt \
@@ -555,14 +551,13 @@ jobs:
           echo "> 💡 Approve a verificação HML abaixo para liberar o deploy em PRD."   >> "$GITHUB_STEP_SUMMARY"
           echo "> ↩️ Para rollback: workflow **↩️ Rollback** → versão anterior será \`${{ steps.snapshot.outputs.prev_version }}\`." >> "$GITHUB_STEP_SUMMARY"
 
-
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  ✅ VERIFICAÇÃO HML — Gate de qualidade pós-deploy                       ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   verify-hml:
     name: ✅ Verificação HML — Aprovar para liberar PRD
     runs-on: ubuntu-latest
-    needs: [ci, deploy-hml]
+    needs: [deploy-hml]
     if: ${{ needs.deploy-hml.result == 'success' }}
 
     environment:
@@ -584,7 +579,6 @@ jobs:
         run: |
           echo "✅ HML aprovada por @${{ github.actor }} em $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
           echo "📣 Notificação Slack será enviada antes do deploy em PRD."                         >> "$GITHUB_STEP_SUMMARY"
-
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  📣 NOTIFICAÇÃO PRÉ-PRD — Avisa o time antes de ir a produção            ║
@@ -655,7 +649,6 @@ jobs:
           echo "\`\`\`"                                                                      >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                             >> "$GITHUB_STEP_SUMMARY"
           echo "> 💡 Para ativar: adicione secret \`SLACK_WEBHOOK_URL\` e descomente o curl no step acima." >> "$GITHUB_STEP_SUMMARY"
-
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  🔴 DEPLOY PRD — Depende de notify-pre-prd                              ║
@@ -774,8 +767,8 @@ jobs:
       - name: 🔴 Deploy em PRD (Vercel Production)
         id: deploy
         env:
-          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_PRD }}
         run: |
           DEPLOY_URL=$(vercel deploy --prebuilt --prod \
@@ -862,7 +855,6 @@ jobs:
           echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
           echo "> 💡 Approve a verificação final abaixo para encerrar o ciclo."        >> "$GITHUB_STEP_SUMMARY"
           echo "> ↩️ Para rollback: workflow **↩️ Rollback** → versão anterior será \`${{ steps.snapshot.outputs.prev_version }}\`." >> "$GITHUB_STEP_SUMMARY"
-
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  🎯 VERIFICAÇÃO PRD — Gate final com notificação de sucesso ou falha     ║
