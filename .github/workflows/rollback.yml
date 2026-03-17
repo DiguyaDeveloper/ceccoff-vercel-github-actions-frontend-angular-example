@@ -270,7 +270,10 @@ jobs:
             --meta rollback_reason="${{ inputs.reason }}" \
             2>&1)
 
-          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -E '^https://' | tail -1)
+          echo "--- Vercel output ---"
+          echo "$DEPLOY_OUTPUT"
+          echo "--- End output ---"
+          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://[^ ]+' | grep -v 'inspect' | tail -1)
 
           if [[ -z "$DEPLOY_URL" ]]; then
             echo "❌ Vercel não retornou URL. Output completo:"
@@ -415,7 +418,10 @@ jobs:
             --meta rollback_reason="${{ inputs.reason }}" \
             2>&1)
 
-          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -E '^https://' | tail -1)
+          echo "--- Vercel output ---"
+          echo "$DEPLOY_OUTPUT"
+          echo "--- End output ---"
+          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://[^ ]+' | grep -v 'inspect' | tail -1)
 
           if [[ -z "$DEPLOY_URL" ]]; then
             echo "❌ Vercel não retornou URL. Output completo:"
