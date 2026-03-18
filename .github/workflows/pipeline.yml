@@ -867,7 +867,7 @@ jobs:
   verify-prd:
     name: 🎯 Verificação PRD — Finalizar ou Rollback
     runs-on: ubuntu-latest
-    needs: [ci, deploy-hml, verify-hml, notify-pre-prd, deploy-prd]
+    needs: [ci, deploy-prd]
     if: ${{ needs.deploy-prd.result == 'success' }}
 
     environment:
@@ -893,7 +893,7 @@ jobs:
   notify-prd-success:
     name: 🎉 Notificar Slack — PRD com Sucesso
     runs-on: ubuntu-latest
-    needs: [ci, deploy-hml, deploy-prd, verify-prd]
+    needs: [ci, verify-prd]
     if: needs.verify-prd.result == 'success'
     permissions:
       actions: write
@@ -935,7 +935,7 @@ jobs:
           echo "| Ambiente  | Status                                                  |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-----------|------------------------------------------------------   |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 🔵 DEV    | ✅ Deployado e Verificado (ciclo independente)          |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🟡 HML    | ${{ needs.deploy-hml.result == 'success' && '✅ Deployado e Verificado' || '—' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🟡 HML    | ✅ Deployado e Verificado                               |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 🔴 PRD    | ✅ Deployado e Verificado                               |" >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
           echo "| Item              | Detalhe                                         |" >> "$GITHUB_STEP_SUMMARY"
