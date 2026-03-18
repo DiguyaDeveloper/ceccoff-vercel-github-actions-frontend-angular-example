@@ -673,7 +673,8 @@ jobs:
     needs: [deploy-prd]
     if: ${{ needs.deploy-prd.result == 'success' }}
     permissions:
-      actions: write
+      actions:     write
+      deployments: write  # necessário para reviewPendingDeploymentsForRun
 
     environment:
       name: PRD - Finalizar Release
@@ -756,18 +757,26 @@ jobs:
               return;
             }
 
-            const envIds = pending.map(d => d.environment.id);
+            const envIds   = pending.map(d => d.environment.id);
             const envNames = pending.map(d => d.environment.name).join(', ');
 
-            // Rejeita os gates pendentes sem cancelar o workflow inteiro
-            await github.rest.actions.reviewPendingDeploymentsForRun({
-              owner:           context.repo.owner,
-              repo:            context.repo.repo,
-              run_id:          context.runId,
-              environment_ids: envIds,
-              state:           'rejected',
-              comment:         '🤖 Rejeitado automaticamente — PRD aprovado com sucesso.'
-            });
-
-            console.log(`⏹️ Gates rejeitados: ${envNames}`);
+            try {
+              // Rejeita os gates pendentes sem cancelar o workflow inteiro
+              await github.rest.actions.reviewPendingDeploymentsForRun({
+                owner:           context.repo.owner,
+                repo:            context.repo.repo,
+                run_id:          context.runId,
+                environment_ids: envIds,
+                state:           'rejected',
+                comment:         '🤖 Rejeitado automaticamente — PRD aprovado com sucesso.'
+              });
+              console.log(`⏹️ Gates rejeitados: ${envNames}`);
+            } catch (e) {
+              if (e.status === 422) {
+                // 422 = gate já aprovado/finalizado entre o GET e o POST — sem problema
+                console.log(`ℹ️ Gates já resolvidos (${envNames}) — nada a rejeitar.`);
+              } else {
+                throw e;
+              }
+            }
 
