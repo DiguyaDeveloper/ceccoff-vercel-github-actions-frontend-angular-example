@@ -179,7 +179,8 @@ jobs:
       - name: ⬇️ Checkout código
         uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup-deps
+      - name: 🛠️ Setup Node + npm ci + Vercel CLI
+        uses: ./.github/actions/setup-deps
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -203,7 +204,8 @@ jobs:
           du -sh dist/**/* 2>/dev/null | sort -h >> "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: ./.github/actions/vercel-build-output
+      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
+        uses: ./.github/actions/vercel-build-output
         with:
           app-name: ${{ env.APP_NAME }}
 
@@ -229,7 +231,8 @@ jobs:
           echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
           echo "✅ Deploy DEV: ${DEPLOY_URL}"
 
-      - uses: ./.github/actions/register-deployment
+      - name: 💾 Registrar deployment no GitHub Deployments API
+        uses: ./.github/actions/register-deployment
         with:
           environment: dev
           version: ${{ needs.ci.outputs.version }}
@@ -323,7 +326,8 @@ jobs:
       - name: ⬇️ Checkout código
         uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup-deps
+      - name: 🛠️ Setup Node + npm ci + Vercel CLI
+        uses: ./.github/actions/setup-deps
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -375,7 +379,8 @@ jobs:
           du -sh dist/**/* 2>/dev/null | sort -h >> "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: ./.github/actions/vercel-build-output
+      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
+        uses: ./.github/actions/vercel-build-output
         with:
           app-name: ${{ env.APP_NAME }}
 
@@ -402,7 +407,8 @@ jobs:
           echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
           echo "✅ Deploy HML: ${DEPLOY_URL}"
 
-      - uses: ./.github/actions/register-deployment
+      - name: 💾 Registrar deployment no GitHub Deployments API
+        uses: ./.github/actions/register-deployment
         with:
           environment: hml
           version: ${{ needs.ci.outputs.version }}
@@ -532,7 +538,8 @@ jobs:
       - name: ⬇️ Checkout código
         uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup-deps
+      - name: 🛠️ Setup Node + npm ci + Vercel CLI
+        uses: ./.github/actions/setup-deps
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -584,7 +591,8 @@ jobs:
           du -sh dist/**/* 2>/dev/null | sort -h >> "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: ./.github/actions/vercel-build-output
+      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
+        uses: ./.github/actions/vercel-build-output
         with:
           app-name: ${{ env.APP_NAME }}
 
@@ -611,7 +619,8 @@ jobs:
           echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
           echo "✅ Deploy PRD: ${DEPLOY_URL}"
 
-      - uses: ./.github/actions/register-deployment
+      - name: 💾 Registrar deployment no GitHub Deployments API
+        uses: ./.github/actions/register-deployment
         with:
           environment: prd
           version: ${{ needs.verify-hml.outputs.version }}
