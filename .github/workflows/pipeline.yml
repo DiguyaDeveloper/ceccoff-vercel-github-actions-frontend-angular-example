@@ -178,8 +178,6 @@ jobs:
     steps:
       - name: ⬇️ Checkout código
         uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.ci.outputs.version != 'v0.0.0-dev' && needs.ci.outputs.version || github.sha }}
 
       - uses: ./.github/actions/setup-deps
         with:
@@ -324,8 +322,6 @@ jobs:
     steps:
       - name: ⬇️ Checkout código
         uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.ci.outputs.version != 'v0.0.0-dev' && needs.ci.outputs.version || github.sha }}
 
       - uses: ./.github/actions/setup-deps
         with:
@@ -535,8 +531,6 @@ jobs:
     steps:
       - name: ⬇️ Checkout código
         uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.verify-hml.outputs.version != 'v0.0.0-dev' && needs.verify-hml.outputs.version || github.sha }}
 
       - uses: ./.github/actions/setup-deps
         with:
