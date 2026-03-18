@@ -280,6 +280,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [deploy-dev]
     if: ${{ needs.deploy-dev.result == 'success' }}
+    continue-on-error: true  # Gate paralelo ao HML→PRD; timeout/cancel não afeta status geral
 
     environment:
       name: DEV - Verificar
@@ -738,4 +739,31 @@ jobs:
           echo "| 👤 Por    | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |" >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
           echo "> 📣 Notificação de sucesso enviada ao Slack."                         >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 🧹 Cancelar gate verify-dev se ainda pendente
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Busca jobs do run atual e cancela apenas se verify-dev ainda estiver em_progresso/aguardando
+            const { data } = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              run_id: context.runId
+            });
+            const gate = data.jobs.find(j =>
+              j.name.includes('Verificação DEV') &&
+              (j.status === 'in_progress' || j.status === 'waiting' || j.status === 'queued')
+            );
+            if (gate) {
+              console.log(`⏹️ Cancelando gate pendente: ${gate.name} (ID: ${gate.id})`);
+              // Não há endpoint para cancelar job individual; cancela o run.
+              // verify-dev tem continue-on-error: true → status geral não é afetado.
+              await github.rest.actions.cancelWorkflowRun({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                run_id: context.runId
+              });
+            } else {
+              console.log('✅ Nenhum gate pendente encontrado — nada a cancelar.');
+            }
 
