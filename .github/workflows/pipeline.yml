@@ -169,6 +169,10 @@ jobs:
       deployments: write
       contents: read
 
+    outputs:
+      version: ${{ needs.ci.outputs.version }}
+      url:     ${{ steps.deploy.outputs.url }}
+
     environment:
       name: DEV - Deploy
       url: ${{ steps.deploy.outputs.url }}
@@ -215,7 +219,7 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: 📦 Instalar Vercel CLI
-        run: npm install -g vercel@latest
+        run: npm install -g vercel@37 --prefer-offline
 
       - name: 🗂️ Criar estrutura Vercel Build Output (prebuilt)
         run: |
@@ -267,20 +271,25 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: '${{ needs.ci.outputs.version }}',
+              environment: 'dev',
+              description: 'Version: ${{ needs.ci.outputs.version }}',
+              auto_merge: false,
+              required_contexts: []
+            });
             await github.rest.repos.createDeploymentStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              deployment_id: context.payload.deployment?.id || 0,
+              deployment_id: deployment.data.id,
               state: 'success',
               environment_url: '${{ steps.deploy.outputs.url }}',
               description: 'Version: ${{ needs.ci.outputs.version }}'
-            }).catch(() => {
-              // Ignora erros — o registro é best-effort
-              console.log('Deployment status registration skipped');
             });
-
-            // Salva a versão como variável de ambiente reutilizável
-            core.exportVariable('DEPLOYED_VERSION_DEV', '${{ needs.ci.outputs.version }}');
+            core.setOutput('deployment_id', deployment.data.id);
+            console.log(`Deployment DEV registrado: ID ${deployment.data.id}`);
 
       - name: 🏥 Health Check DEV
         id: health
@@ -335,7 +344,7 @@ jobs:
         run: |
           echo "## ✅ Gate de Verificação — DEV"                                        >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                        >> "$GITHUB_STEP_SUMMARY"
-          echo "Versão **\`${{ needs.ci.outputs.version }}\`** está live em DEV."       >> "$GITHUB_STEP_SUMMARY"
+          echo "Versão **\`${{ needs.deploy-dev.outputs.version }}\`** está live em DEV."       >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                        >> "$GITHUB_STEP_SUMMARY"
           echo "| Ação              | Resultado                                        |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-------------------|--------------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
@@ -357,6 +366,11 @@ jobs:
     permissions:
       deployments: write
       contents: read
+
+    outputs:
+      version:      ${{ needs.ci.outputs.version }}
+      url:          ${{ steps.deploy.outputs.url }}
+      prev_version: ${{ steps.snapshot.outputs.prev_version }}
 
     environment:
       name: HML - Deploy
@@ -437,7 +451,7 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: 📦 Instalar Vercel CLI
-        run: npm install -g vercel@latest
+        run: npm install -g vercel@37 --prefer-offline
 
       - name: 🗂️ Criar estrutura Vercel Build Output (prebuilt)
         run: |
@@ -568,7 +582,7 @@ jobs:
         run: |
           echo "## ✅ Gate de Verificação — HML"                                       >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "Versão **\`${{ needs.ci.outputs.version }}\`** está live em HML."      >> "$GITHUB_STEP_SUMMARY"
+          echo "Versão **\`${{ needs.deploy-hml.outputs.version }}\`** está live em HML."      >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
           echo "| Ação           | Resultado                                          |" >> "$GITHUB_STEP_SUMMARY"
           echo "|----------------|----------------------------------------------------|" >> "$GITHUB_STEP_SUMMARY"
@@ -580,78 +594,37 @@ jobs:
           echo "✅ HML aprovada por @${{ github.actor }} em $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
           echo "📣 Notificação Slack será enviada antes do deploy em PRD."                         >> "$GITHUB_STEP_SUMMARY"
 
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  📣 NOTIFICAÇÃO PRÉ-PRD — Avisa o time antes de ir a produção            ║
-  # ║                                                                            ║
-  # ║  Fake notifier: simula envio para Slack com output no sumário.            ║
-  # ║  Para integrar de verdade: substituir o step por webhook real.            ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
-  notify-pre-prd:
-    name: 📣 Notificar Slack — Deploy PRD iniciando
-    runs-on: ubuntu-latest
-    needs: [ci, verify-hml]
-    if: ${{ needs.verify-hml.result == 'success' }}
-
-    steps:
-      - name: 📣 [FAKE] Enviar notificação Slack
+      - name: 📣 [FAKE] Notificar Slack — Deploy PRD iniciando
         run: |
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          VERSION="${{ needs.ci.outputs.version }}"
+          VERSION="${{ needs.deploy-hml.outputs.version }}"
           SHA="${{ needs.ci.outputs.sha_short }}"
           ACTOR="${{ github.actor }}"
 
-          # ── Simula payload que seria enviado ao Slack ────────────────────────
           cat << SLACK
           {
             "channel": "#deployments",
             "text": "🚀 *CECCOFF — Deploy PRD Iniciando*",
-            "blocks": [
-              {
-                "type": "header",
-                "text": { "type": "plain_text", "text": "🚀 Deploy em Produção" }
-              },
-              {
-                "type": "section",
-                "fields": [
-                  { "type": "mrkdwn", "text": "*Versão:*\n\`${VERSION}\`" },
-                  { "type": "mrkdwn", "text": "*SHA:*\n\`${SHA}\`" },
-                  { "type": "mrkdwn", "text": "*Autorizado por:*\n@${ACTOR}" },
-                  { "type": "mrkdwn", "text": "*Horário:*\n${TIMESTAMP}" },
-                  { "type": "mrkdwn", "text": "*HML:*\n✅ Aprovado e verificado" },
-                  { "type": "mrkdwn", "text": "*Status:*\n⏳ Aguardando gate PRD" }
-                ]
-              }
-            ]
+            "attachments": [{
+              "color": "#439FE0",
+              "fields": [
+                { "title": "Versão",         "value": "${VERSION}",    "short": true },
+                { "title": "SHA",            "value": "${SHA}",        "short": true },
+                { "title": "Autorizado por", "value": "@${ACTOR}",     "short": true },
+                { "title": "Horário",        "value": "${TIMESTAMP}",  "short": true }
+              ]
+            }]
           }
           SLACK
 
-          # ── Para usar de verdade: descomente e adicione SLACK_WEBHOOK_URL ───
           # curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
           #   -H 'Content-type: application/json' \
-          #   --data "{\"text\":\"🚀 Deploy PRD iniciando — versão \`${VERSION}\` autorizado por @${ACTOR}\"}"
+          #   --data "{\"text\":\"🚀 Deploy PRD iniciando — versão \`${VERSION}\` por @${ACTOR}\"}"
 
-          echo "✅ [FAKE] Notificação enviada ao Slack"
-
-      - name: 📊 Sumário — Notificação PRÉ-PRD
-        run: |
-          echo "## 📣 Notificação Slack — PRÉ-PRD"                                          >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                             >> "$GITHUB_STEP_SUMMARY"
-          echo "\`\`\`"                                                                      >> "$GITHUB_STEP_SUMMARY"
-          echo "🚀 CECCOFF — Deploy PRD Iniciando"                                          >> "$GITHUB_STEP_SUMMARY"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"                                         >> "$GITHUB_STEP_SUMMARY"
-          echo "📦 Versão : ${{ needs.ci.outputs.version }}"                                >> "$GITHUB_STEP_SUMMARY"
-          echo "🔑 SHA    : ${{ needs.ci.outputs.sha_short }}"                              >> "$GITHUB_STEP_SUMMARY"
-          echo "✅ HML    : Aprovado e verificado"                                          >> "$GITHUB_STEP_SUMMARY"
-          echo "👤 Por    : @${{ github.actor }}"                                           >> "$GITHUB_STEP_SUMMARY"
-          echo "🕐 Em     : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"                           >> "$GITHUB_STEP_SUMMARY"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"                                         >> "$GITHUB_STEP_SUMMARY"
-          echo "⏳ Aguardando gate de aprovação PRD..."                                     >> "$GITHUB_STEP_SUMMARY"
-          echo "\`\`\`"                                                                      >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                             >> "$GITHUB_STEP_SUMMARY"
-          echo "> 💡 Para ativar: adicione secret \`SLACK_WEBHOOK_URL\` e descomente o curl no step acima." >> "$GITHUB_STEP_SUMMARY"
+          echo "✅ [FAKE] Notificação PRÉ-PRD enviada ao Slack"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🔴 DEPLOY PRD — Depende de notify-pre-prd                              ║
+  # ║  🔴 DEPLOY PRD — Depende de verify-hml                                  ║
   # ║                                                                            ║
   # ║  Build com: variáveis de produção                                        ║
   # ║  Salva a tag atual antes de deployar (usada pelo Rollback)               ║
@@ -659,8 +632,8 @@ jobs:
   deploy-prd:
     name: 🔴 Deploy → PRD
     runs-on: ubuntu-latest
-    needs: [ci, notify-pre-prd]
-    if: ${{ needs.notify-pre-prd.result == 'success' }}
+    needs: [ci, verify-hml]
+    if: ${{ needs.verify-hml.result == 'success' }}
     permissions:
       deployments: write
       contents: read
@@ -748,7 +721,7 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: 📦 Instalar Vercel CLI
-        run: npm install -g vercel@latest
+        run: npm install -g vercel@37 --prefer-offline
 
       - name: 🗂️ Criar estrutura Vercel Build Output (prebuilt)
         run: |
@@ -861,9 +834,6 @@ jobs:
           echo "> 💡 Approve a verificação final abaixo para encerrar o ciclo."        >> "$GITHUB_STEP_SUMMARY"
           echo "> ↩️ Para rollback: workflow **↩️ Rollback** → versão anterior será \`${{ steps.snapshot.outputs.prev_version }}\`." >> "$GITHUB_STEP_SUMMARY"
 
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🎯 VERIFICAÇÃO PRD — Gate final com notificação de sucesso ou falha     ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  🎯 VERIFICAÇÃO PRD — Gate final + notificação de sucesso inline         ║
   # ║                                                                            ║
@@ -1062,7 +1032,7 @@ jobs:
           echo "✅ Build rollback PRD gerado"
 
       - name: 📦 Instalar Vercel CLI
-        run: npm install -g vercel@latest
+        run: npm install -g vercel@37 --prefer-offline
 
       - name: 🗂️ Criar estrutura Vercel Build Output (prebuilt)
         run: |
