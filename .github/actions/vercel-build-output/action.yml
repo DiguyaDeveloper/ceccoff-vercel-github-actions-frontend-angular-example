@@ -1,0 +1,44 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  🗂️ Composite Action: vercel-build-output                                  ║
+# ║                                                                              ║
+# ║  Prepara a estrutura .vercel/output/ (Vercel Build Output API v3)           ║
+# ║  com as rotas SPA configuradas para Angular:                                ║
+# ║    - Assets/JS/CSS: cache imutável (max-age=1y)                             ║
+# ║    - index.html: no-cache (sempre fresh)                                    ║
+# ║    - /* → /index.html: fallback para routing client-side                    ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 'Vercel Build Output'
+description: 'Prepara .vercel/output/ (prebuilt SPA) com rotas Angular e cache headers'
+
+inputs:
+  app-name:
+    description: 'Nome da pasta em dist/ gerada pelo Angular (angular.json → outputPath)'
+    required: false
+    default: 'ceccoff-frontend'
+
+runs:
+  using: composite
+  steps:
+    - name: 🗂️ Criar estrutura Vercel Build Output (prebuilt)
+      shell: bash
+      run: |
+        mkdir -p .vercel/output/static
+        cp -r dist/${{ inputs.app-name }}/browser/. .vercel/output/static/
+
+        cat > .vercel/output/config.json << 'VCEOF'
+        {
+          "version": 3,
+          "routes": [
+            {"src":"/assets/(.*)","headers":{"cache-control":"public, max-age=31536000, immutable"},"continue":true},
+            {"src":"/(.*)\\.js","headers":{"cache-control":"public, max-age=31536000, immutable"},"continue":true},
+            {"src":"/(.*)\\.css","headers":{"cache-control":"public, max-age=31536000, immutable"},"continue":true},
+            {"src":"/index\\.html","headers":{"cache-control":"no-cache, no-store, must-revalidate"},"continue":true},
+            {"handle":"filesystem"},
+            {"src":"/(.*)","dest":"/index.html"}
+          ]
+        }
+        VCEOF
+
+        echo "✅ Vercel Build Output pronto em .vercel/output/"
+        echo "   → $(find .vercel/output/static -type f | wc -l) arquivos copiados"

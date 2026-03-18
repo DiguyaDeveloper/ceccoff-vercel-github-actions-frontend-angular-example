@@ -1,0 +1,43 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  🛠️ Composite Action: setup-deps                                           ║
+# ║                                                                              ║
+# ║  Agrupa os 4 passos de setup que se repetem em TODOS os jobs de deploy:     ║
+# ║    1. Checkout do código na ref correta (tag ou SHA)                        ║
+# ║    2. Setup do Node.js com cache npm                                        ║
+# ║    3. Instalação de dependências (npm ci --prefer-offline)                  ║
+# ║    4. Instalação do Vercel CLI (versão pinada)                              ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 'Setup deps'
+description: 'Checkout + Node.js + npm ci + Vercel CLI (usado nos jobs de deploy)'
+
+inputs:
+  ref:
+    description: 'Git ref para checkout (tag semântica ou SHA)'
+    required: true
+  node-version:
+    description: 'Versão do Node.js'
+    required: false
+    default: '20.x'
+
+runs:
+  using: composite
+  steps:
+    - name: ⬇️ Checkout código
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.ref }}
+
+    - name: 🟢 Setup Node.js ${{ inputs.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: 'npm'
+
+    - name: 📥 Instalar dependências
+      shell: bash
+      run: npm ci --prefer-offline
+
+    - name: 📦 Instalar Vercel CLI
+      shell: bash
+      run: npm install -g vercel@37 --prefer-offline

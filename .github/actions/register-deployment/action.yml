@@ -1,0 +1,64 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  💾 Composite Action: register-deployment                                  ║
+# ║                                                                              ║
+# ║  Registra um deployment no histórico da GitHub Deployments API.             ║
+# ║  Este histórico é consultado pelo workflow ↩️ Rollback para detectar        ║
+# ║  automaticamente a versão ativa por ambiente.                               ║
+# ║                                                                              ║
+# ║  Sequência: createDeployment → createDeploymentStatus (state: success)      ║
+# ║                                                                              ║
+# ║  Permissão necessária no job chamador: deployments: write                   ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 'Register GitHub Deployment'
+description: 'Registra deployment no histórico GitHub Deployments API (rastreamento para rollback)'
+
+inputs:
+  environment:
+    description: 'Ambiente alvo — dev | hml | prd'
+    required: true
+  version:
+    description: 'Tag/versão deployada (ex: v1.2.3)'
+    required: true
+  url:
+    description: 'URL pública do deployment'
+    required: true
+
+outputs:
+  deployment-id:
+    description: 'ID numérico do deployment criado'
+    value: ${{ steps.register.outputs.deployment_id }}
+
+runs:
+  using: composite
+  steps:
+    - name: 💾 Registrar no GitHub Deployments API
+      id: register
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const env     = '${{ inputs.environment }}';
+          const version = '${{ inputs.version }}';
+          const url     = '${{ inputs.url }}';
+
+          const deployment = await github.rest.repos.createDeployment({
+            owner:             context.repo.owner,
+            repo:              context.repo.repo,
+            ref:               version,
+            environment:       env,
+            description:       `Version: ${version}`,
+            auto_merge:        false,
+            required_contexts: []
+          });
+
+          await github.rest.repos.createDeploymentStatus({
+            owner:           context.repo.owner,
+            repo:            context.repo.repo,
+            deployment_id:   deployment.data.id,
+            state:           'success',
+            environment_url: url,
+            description:     `Version: ${version}`
+          });
+
+          core.setOutput('deployment_id', String(deployment.data.id));
+          console.log(`✅ Deployment ${env.toUpperCase()} registrado: ID ${deployment.data.id} — ${version} → ${url}`);
