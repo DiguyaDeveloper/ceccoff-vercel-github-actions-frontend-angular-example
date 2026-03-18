@@ -197,6 +197,39 @@ jobs:
           echo "| 👤 Autorizado por  | @${{ github.actor }}                              |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 📅 Autorizado em   | $(date -u '+%Y-%m-%d %H:%M:%S UTC')               |" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: 📣 [FAKE] Notificar Slack — Rollback iniciando
+        run: |
+          ENV="${{ inputs.environment }}"
+          FROM="${{ needs.detect-version.outputs.current_version }}"
+          TO="${{ needs.detect-version.outputs.target_version }}"
+          ACTOR="${{ github.actor }}"
+          REASON="${{ inputs.reason }}"
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+          cat << SLACK
+          {
+            "channel": "#deployments",
+            "text": "⏪ *CECCOFF — Rollback ${ENV^^} Iniciando*",
+            "attachments": [{
+              "color": "#ff9900",
+              "fields": [
+                { "title": "Ambiente",       "value": "${ENV}",      "short": true },
+                { "title": "Revertendo de",  "value": "${FROM}",     "short": true },
+                { "title": "Restaurando",    "value": "${TO}",       "short": true },
+                { "title": "Autorizado por", "value": "@${ACTOR}",   "short": true },
+                { "title": "Motivo",         "value": "${REASON}",   "short": false },
+                { "title": "Horário",        "value": "${TIMESTAMP}","short": true }
+              ]
+            }]
+          }
+          SLACK
+
+          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+          #   -H 'Content-type: application/json' \
+          #   --data "{\"text\":\"⏪ Rollback ${ENV} iniciando: ${FROM} → ${TO} — motivo: ${REASON}\"}"
+
+          echo "⏪ [FAKE] Notificação PRÉ-rollback enviada ao Slack"
+
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  🔵 ROLLBACK DEV                                                         ║
@@ -348,6 +381,26 @@ jobs:
           echo "| 📅 Executado em     | $(date -u '+%Y-%m-%d %H:%M:%S UTC')                |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 🏁 Resultado        | ${ICON} ${RESULT}                                  |" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: 📣 [FAKE] Notificar Slack — Rollback DEV concluído
+        if: always()
+        run: |
+          RESULT="${{ job.status }}"
+          FROM="${{ needs.detect-version.outputs.current_version }}"
+          TO="${{ needs.detect-version.outputs.target_version }}"
+          ACTOR="${{ github.actor }}"
+          ICON=$([[ "${RESULT}" == "success" ]] && echo "✅" || echo "❌")
+
+          cat << SLACK
+          { "channel": "#deployments", "text": "${ICON} *CECCOFF — Rollback DEV ${RESULT^^}*",
+            "attachments": [{ "color": "$([[ "${RESULT}" == "success" ]] && echo "#36a64f" || echo "#ff0000")",
+              "fields": [
+                { "title": "Revertido de",  "value": "${FROM}", "short": true },
+                { "title": "Restaurado para","value": "${TO}",  "short": true },
+                { "title": "Por",           "value": "@${ACTOR}","short": true },
+                { "title": "Resultado",     "value": "${RESULT}","short": true }
+              ]}]}
+          SLACK
+          echo "${ICON} [FAKE] Notificação PÓS-rollback DEV enviada ao Slack"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  🟡 ROLLBACK HML                                                         ║
@@ -510,6 +563,26 @@ jobs:
           echo "| 📅 Executado em     | $(date -u '+%Y-%m-%d %H:%M:%S UTC')              |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 🏁 Resultado        | ${ICON} ${RESULT}                                |" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: 📣 [FAKE] Notificar Slack — Rollback HML concluído
+        if: always()
+        run: |
+          RESULT="${{ job.status }}"
+          FROM="${{ needs.detect-version.outputs.current_version }}"
+          TO="${{ needs.detect-version.outputs.target_version }}"
+          ACTOR="${{ github.actor }}"
+          ICON=$([[ "${RESULT}" == "success" ]] && echo "✅" || echo "❌")
+
+          cat << SLACK
+          { "channel": "#deployments", "text": "${ICON} *CECCOFF — Rollback HML ${RESULT^^}*",
+            "attachments": [{ "color": "$([[ "${RESULT}" == "success" ]] && echo "#36a64f" || echo "#ff0000")",
+              "fields": [
+                { "title": "Revertido de",  "value": "${FROM}", "short": true },
+                { "title": "Restaurado para","value": "${TO}",  "short": true },
+                { "title": "Por",           "value": "@${ACTOR}","short": true },
+                { "title": "Resultado",     "value": "${RESULT}","short": true }
+              ]}]}
+          SLACK
+          echo "${ICON} [FAKE] Notificação PÓS-rollback HML enviada ao Slack"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  🔴 ROLLBACK PRD                                                         ║
@@ -679,3 +752,32 @@ jobs:
             echo "### 🚨 Ação Imediata Necessária"                                        >> "$GITHUB_STEP_SUMMARY"
             echo "Rollback PRD falhou. Acione o time de plantão imediatamente."           >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: 📣 [FAKE] Notificar Slack — Rollback PRD concluído
+        if: always()
+        run: |
+          RESULT="${{ job.status }}"
+          FROM="${{ needs.detect-version.outputs.current_version }}"
+          TO="${{ needs.detect-version.outputs.target_version }}"
+          ACTOR="${{ github.actor }}"
+          REASON="${{ inputs.reason }}"
+          ICON=$([[ "${RESULT}" == "success" ]] && echo "✅" || echo "🚨")
+          COLOR=$([[ "${RESULT}" == "success" ]] && echo "#36a64f" || echo "#ff0000")
+
+          cat << SLACK
+          { "channel": "#deployments", "text": "${ICON} *CECCOFF — Rollback PRD ${RESULT^^}*",
+            "attachments": [{ "color": "${COLOR}",
+              "fields": [
+                { "title": "Revertido de",  "value": "${FROM}",    "short": true },
+                { "title": "Restaurado para","value": "${TO}",     "short": true },
+                { "title": "Por",           "value": "@${ACTOR}",  "short": true },
+                { "title": "Resultado",     "value": "${RESULT}",  "short": true },
+                { "title": "Motivo",        "value": "${REASON}",  "short": false }
+              ]}]}
+          SLACK
+
+          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+          #   -H 'Content-type: application/json' \
+          #   --data "{\"text\":\"${ICON} Rollback PRD ${RESULT}: ${FROM} → ${TO} — ${REASON}\"}"
+
+          echo "${ICON} [FAKE] Notificação PÓS-rollback PRD enviada ao Slack"
