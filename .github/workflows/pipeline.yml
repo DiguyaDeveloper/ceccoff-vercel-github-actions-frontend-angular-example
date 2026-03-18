@@ -740,30 +740,34 @@ jobs:
           echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
           echo "> 📣 Notificação de sucesso enviada ao Slack."                         >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 🧹 Cancelar gate verify-dev se ainda pendente
+      - name: 🧹 Rejeitar gates pendentes (ex. verify-dev)
         uses: actions/github-script@v7
         with:
           script: |
-            // Busca jobs do run atual e cancela apenas se verify-dev ainda estiver em_progresso/aguardando
-            const { data } = await github.rest.actions.listJobsForWorkflowRun({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
+            // Busca deployments pendentes de aprovação neste run
+            const { data: pending } = await github.rest.actions.getPendingDeploymentsForRun({
+              owner:  context.repo.owner,
+              repo:   context.repo.repo,
               run_id: context.runId
             });
-            const gate = data.jobs.find(j =>
-              j.name.includes('Verificação DEV') &&
-              (j.status === 'in_progress' || j.status === 'waiting' || j.status === 'queued')
-            );
-            if (gate) {
-              console.log(`⏹️ Cancelando gate pendente: ${gate.name} (ID: ${gate.id})`);
-              // Não há endpoint para cancelar job individual; cancela o run.
-              // verify-dev tem continue-on-error: true → status geral não é afetado.
-              await github.rest.actions.cancelWorkflowRun({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                run_id: context.runId
-              });
-            } else {
-              console.log('✅ Nenhum gate pendente encontrado — nada a cancelar.');
+
+            if (pending.length === 0) {
+              console.log('✅ Nenhum deployment pendente — nada a rejeitar.');
+              return;
             }
+
+            const envIds = pending.map(d => d.environment.id);
+            const envNames = pending.map(d => d.environment.name).join(', ');
+
+            // Rejeita os gates pendentes sem cancelar o workflow inteiro
+            await github.rest.actions.reviewPendingDeploymentsForRun({
+              owner:           context.repo.owner,
+              repo:            context.repo.repo,
+              run_id:          context.runId,
+              environment_ids: envIds,
+              state:           'rejected',
+              comment:         '🤖 Rejeitado automaticamente — PRD aprovado com sucesso.'
+            });
+
+            console.log(`⏹️ Gates rejeitados: ${envNames}`);
 
