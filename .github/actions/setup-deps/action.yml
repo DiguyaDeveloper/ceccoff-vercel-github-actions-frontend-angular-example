@@ -1,20 +1,19 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  🛠️ Composite Action: setup-deps                                           ║
 # ║                                                                              ║
-# ║  Agrupa os 4 passos de setup que se repetem em TODOS os jobs de deploy:     ║
-# ║    1. Checkout do código na ref correta (tag ou SHA)                        ║
-# ║    2. Setup do Node.js com cache npm                                        ║
-# ║    3. Instalação de dependências (npm ci --prefer-offline)                  ║
-# ║    4. Instalação do Vercel CLI (versão pinada)                              ║
+# ║  IMPORTANTE: actions/checkout deve rodar ANTES desta action no job          ║
+# ║  (actions locais só são carregadas após o repo estar disponível)            ║
+# ║                                                                              ║
+# ║  Agrupa os 3 passos de setup que se repetem em TODOS os jobs de deploy:     ║
+# ║    1. Setup do Node.js com cache npm                                        ║
+# ║    2. Instalação de dependências (npm ci --prefer-offline)                  ║
+# ║    3. Instalação do Vercel CLI (versão pinada)                              ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 name: 'Setup deps'
-description: 'Checkout + Node.js + npm ci + Vercel CLI (usado nos jobs de deploy)'
+description: 'Node.js + npm ci + Vercel CLI. Requer actions/checkout antes no job chamador.'
 
 inputs:
-  ref:
-    description: 'Git ref para checkout (tag semântica ou SHA)'
-    required: true
   node-version:
     description: 'Versão do Node.js'
     required: false
@@ -23,11 +22,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: ⬇️ Checkout código
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ inputs.ref }}
-
     - name: 🟢 Setup Node.js ${{ inputs.node-version }}
       uses: actions/setup-node@v4
       with:

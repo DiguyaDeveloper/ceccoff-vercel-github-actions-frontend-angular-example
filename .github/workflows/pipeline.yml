@@ -176,9 +176,13 @@ jobs:
       url: ${{ steps.deploy.outputs.url }}
 
     steps:
-      - uses: ./.github/actions/setup-deps
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.ci.outputs.version != 'v0.0.0-dev' && needs.ci.outputs.version || github.sha }}
+
+      - uses: ./.github/actions/setup-deps
+        with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: 🔧 Gerar environment.development.ts com secrets — DEV
@@ -309,6 +313,7 @@ jobs:
 
     outputs:
       version:      ${{ needs.ci.outputs.version }}
+      sha_short:    ${{ needs.ci.outputs.sha_short }}
       url:          ${{ steps.deploy.outputs.url }}
       prev_version: ${{ steps.snapshot.outputs.prev_version }}
 
@@ -317,9 +322,13 @@ jobs:
       url: ${{ steps.deploy.outputs.url }}
 
     steps:
-      - uses: ./.github/actions/setup-deps
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.ci.outputs.version != 'v0.0.0-dev' && needs.ci.outputs.version || github.sha }}
+
+      - uses: ./.github/actions/setup-deps
+        with:
           node-version: ${{ env.NODE_VERSION }}
 
       # ── Captura versão atual de HML antes de sobrescrever (para rollback) ──
@@ -448,6 +457,12 @@ jobs:
     needs: [deploy-hml]
     if: ${{ needs.deploy-hml.result == 'success' }}
 
+    # Propaga version/sha_short para deploy-prd poder usar [verify-hml] como
+    # único needs, eliminando a aresta direta ci→deploy-prd no graph visual.
+    outputs:
+      version:   ${{ needs.deploy-hml.outputs.version }}
+      sha_short: ${{ needs.deploy-hml.outputs.sha_short }}
+
     environment:
       name: HML - Liberar PRD
 
@@ -500,13 +515,15 @@ jobs:
   deploy-prd:
     name: 🔴 Deploy → PRD
     runs-on: ubuntu-latest
-    needs: [ci, verify-hml]
+    needs: [verify-hml]
     if: ${{ needs.verify-hml.result == 'success' }}
     permissions:
       deployments: write
       contents: read
 
     outputs:
+      version:      ${{ needs.verify-hml.outputs.version }}
+      sha_short:    ${{ needs.verify-hml.outputs.sha_short }}
       url:          ${{ steps.deploy.outputs.url }}
       prev_version: ${{ steps.snapshot.outputs.prev_version }}
       prev_url:     ${{ steps.snapshot.outputs.prev_url }}
@@ -516,9 +533,13 @@ jobs:
       url: ${{ steps.deploy.outputs.url }}
 
     steps:
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify-hml.outputs.version != 'v0.0.0-dev' && needs.verify-hml.outputs.version || github.sha }}
+
       - uses: ./.github/actions/setup-deps
         with:
-          ref: ${{ needs.ci.outputs.version != 'v0.0.0-dev' && needs.ci.outputs.version || github.sha }}
           node-version: ${{ env.NODE_VERSION }}
 
       # ── Captura versão atual de PRD antes de sobrescrever (para rollback) ──
@@ -556,7 +577,7 @@ jobs:
             name:       'production',
             production: true,
             apiUrl:     '${{ secrets.PRD_API_URL }}',
-            version:    '${{ needs.ci.outputs.version }}',
+            version:    '${{ needs.verify-hml.outputs.version }}',
           };
           EOF
 
@@ -582,8 +603,8 @@ jobs:
         run: |
           DEPLOY_URL=$(vercel deploy --prebuilt --prod \
             --token="$VERCEL_TOKEN" --yes \
-            --meta version="${{ needs.ci.outputs.version }}" \
-            --meta sha="${{ needs.ci.outputs.sha_short }}" \
+            --meta version="${{ needs.verify-hml.outputs.version }}" \
+            --meta sha="${{ needs.verify-hml.outputs.sha_short }}" \
             --meta environment=prd \
             --meta prev_version="${{ steps.snapshot.outputs.prev_version }}" \
             2>/dev/null)
@@ -599,7 +620,7 @@ jobs:
       - uses: ./.github/actions/register-deployment
         with:
           environment: prd
-          version: ${{ needs.ci.outputs.version }}
+          version: ${{ needs.verify-hml.outputs.version }}
           url: ${{ steps.deploy.outputs.url }}
 
       - name: 🏥 Health Check PRD
@@ -624,8 +645,8 @@ jobs:
           echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
           echo "| Item | Detalhe |"                                                    >> "$GITHUB_STEP_SUMMARY"
           echo "|------|---------|"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão   | \`${{ needs.ci.outputs.version }}\` |"                >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔑 SHA      | \`${{ needs.ci.outputs.sha_short }}\` |"              >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão   | \`${{ needs.verify-hml.outputs.version }}\` |"           >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔑 SHA      | \`${{ needs.verify-hml.outputs.sha_short }}\` |"        >> "$GITHUB_STEP_SUMMARY"
           echo "| ⚙️ Config   | ng build --configuration=production |"                >> "$GITHUB_STEP_SUMMARY"
           echo "| 📦 Anterior | \`${{ steps.snapshot.outputs.prev_version }}\` |"    >> "$GITHUB_STEP_SUMMARY"
           echo "| 🔗 URL      | ${{ steps.deploy.outputs.url }} |"                   >> "$GITHUB_STEP_SUMMARY"
@@ -645,7 +666,7 @@ jobs:
   verify-prd:
     name: 🎯 Verificação PRD — Finalizar ou Rollback
     runs-on: ubuntu-latest
-    needs: [ci, deploy-prd]
+    needs: [deploy-prd]
     if: ${{ needs.deploy-prd.result == 'success' }}
     permissions:
       actions: write
@@ -661,7 +682,7 @@ jobs:
         run: |
           echo "## 🎯 Gate de Verificação Final — PRODUÇÃO"                               >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                          >> "$GITHUB_STEP_SUMMARY"
-          echo "⚡ **Versão \`${{ needs.ci.outputs.version }}\` está LIVE em Produção!**" >> "$GITHUB_STEP_SUMMARY"
+          echo "⚡ **Versão \`${{ needs.deploy-prd.outputs.version }}\` está LIVE em Produção!**" >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                          >> "$GITHUB_STEP_SUMMARY"
           echo "| Ação | Resultado |"                                                     >> "$GITHUB_STEP_SUMMARY"
           echo "|------|-----------|"                                                     >> "$GITHUB_STEP_SUMMARY"
@@ -670,8 +691,8 @@ jobs:
 
       - name: 📣 [FAKE] Notificar Slack — Deploy PRD SUCESSO
         run: |
-          VERSION="${{ needs.ci.outputs.version }}"
-          SHA="${{ needs.ci.outputs.sha_short }}"
+          VERSION="${{ needs.deploy-prd.outputs.version }}"
+          SHA="${{ needs.deploy-prd.outputs.sha_short }}"
           ACTOR="${{ github.actor }}"
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
 
@@ -709,8 +730,8 @@ jobs:
           echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
           echo "| Item | Detalhe |"                                                    >> "$GITHUB_STEP_SUMMARY"
           echo "|------|---------|"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão | \`${{ needs.ci.outputs.version }}\` |"                  >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔑 SHA    | \`${{ needs.ci.outputs.sha_short }}\` |"                >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão | \`${{ needs.deploy-prd.outputs.version }}\` |"             >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔑 SHA    | \`${{ needs.deploy-prd.outputs.sha_short }}\` |"           >> "$GITHUB_STEP_SUMMARY"
           echo "| 👤 Por    | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |" >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
           echo "> 📣 Notificação de sucesso enviada ao Slack."                         >> "$GITHUB_STEP_SUMMARY"
