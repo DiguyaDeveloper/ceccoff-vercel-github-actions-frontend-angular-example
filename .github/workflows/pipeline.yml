@@ -739,17 +739,3 @@ jobs:
           echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
           echo "> 📣 Notificação de sucesso enviada ao Slack."                         >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 🧹 Encerrar pipeline — cancelar gates pendentes (ex. verify-dev)
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await new Promise(r => setTimeout(r, 3000));
-            try {
-              await github.rest.actions.cancelWorkflowRun({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                run_id: context.runId
-              });
-            } catch (e) {
-              console.log('ℹ️ Workflow já encerrado:', e.message);
-            }
