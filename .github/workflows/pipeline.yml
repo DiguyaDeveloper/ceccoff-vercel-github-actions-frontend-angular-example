@@ -7,10 +7,11 @@
 # ║                                                                              ║
 # ║  Stages:                                                                     ║
 # ║    1 · setup     → detecta versão/SHA                                       ║
-# ║    2 · test      → matrix Node 18+20 (lint, testes, coverage) em paralelo  ║
-# ║      · security  → npm audit em paralelo ao test                            ║
-# ║      · sonar     → SonarCloud analysis após test (usa coverage)            ║
-# ║    3 · deploy-dev + deploy-hml (paralelos, gatados por test+security)       ║
+# ║    2 · test          → matrix Node 18+20 (lint, testes, coverage)          ║
+# ║      · security      → npm audit (paralelo ao test)                        ║
+# ║      · code-analysis → CodeQL SAST (paralelo ao test)                      ║
+# ║      · semgrep       → Semgrep rules TypeScript (paralelo ao test)         ║
+# ║    3 · deploy-dev + deploy-hml (paralelos, gatados por todos do stage 2)   ║
 # ║    4 · verify-dev (continue-on-error) + verify-hml (gate)                  ║
 # ║    5 · deploy-prd                                                            ║
 # ║    6 · verify-prd (rejeita gates pendentes via PAT_REJECT_TOKEN)            ║
@@ -23,7 +24,6 @@
 # ║    vercel-deploy         → vercel deploy --prebuilt, retorna URL           ║
 # ║    register-deployment   → GitHub Deployments API (rastreabilidade)        ║
 # ║    health-check          → retry loop HTTP 200/401, modo strict            ║
-# ║    sonar-scan            → SonarCloud analysis com coverage               ║
 # ║    snapshot-prev-version → última versão bem-sucedida por ambiente         ║
 # ║    deploy-summary        → relatório de deploy no GITHUB_STEP_SUMMARY      ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -194,40 +194,114 @@ jobs:
           echo "| 🧪 Testes | $([[ '${{ steps.tests.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 2b — SonarCloud Analysis (após test, em paralelo com security)   ║
-  # ║  Baixa o artefato de coverage do job test e envia para o SonarCloud.    ║
-  # ║                                                                          ║
-  # ║  Pré-requisitos:                                                         ║
-  # ║    1. Conta em sonarcloud.io → importar este repositório                ║
-  # ║    2. Copiar Project Key e Organization → atualizar sonar-project.props ║
-  # ║    3. Criar secret SONAR_TOKEN no GitHub (Settings → Secrets → Actions) ║
-  # ║                                                                          ║
-  # ║  continue-on-error: true enquanto SONAR_TOKEN não estiver configurado.  ║
-  # ║  Remova esse flag para tornar o SonarCloud um hard gate.                ║
+  # ║  STAGE 2b — CodeQL Analysis (paralelo ao test)                           ║
+  # ║  SAST nativo do GitHub. 100% open-source, zero infraestrutura.           ║
+  # ║  Resultados aparecem em Security → Code scanning alerts do repositório.  ║
+  # ║  Detecta: injeção, XSS, path traversal, race conditions, etc.            ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
-  sonar:
-    name: 📊 SonarCloud
+  code-analysis:
+    name: 🔬 CodeQL Analysis
     runs-on: ubuntu-latest
-    needs: [setup, test]
-    continue-on-error: true  # ← remova quando SONAR_TOKEN estiver configurado
+    needs: [setup]
+    permissions:
+      actions:         read
+      contents:        read
+      security-events: write  # necessário para upload de resultados SARIF
 
     steps:
       - name: ⬇️ Checkout código
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # histórico completo necessário para blame/new-code analysis
 
-      - name: 📊 SonarCloud Analysis
-        uses: ./.github/actions/sonar-scan
+      - name: 🔬 Inicializar CodeQL
+        uses: github/codeql-action/init@v3
         with:
-          sonar-token:        ${{ secrets.SONAR_TOKEN }}
-          github-token:       ${{ secrets.GITHUB_TOKEN }}
-          coverage-artifact:  coverage-report-${{ needs.setup.outputs.sha_short }}
+          languages: javascript-typescript
+          # security-extended: regras adicionais de segurança além do padrão
+          # security-and-quality: inclui qualidade de código
+          queries: security-extended,security-and-quality
+
+      - name: 🔬 Executar análise CodeQL
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:javascript-typescript
+
+      - name: 📊 Sumário — CodeQL
+        if: always()
+        run: |
+          echo "## 🔬 CodeQL Analysis"                                              >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                    >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Detalhe |"                                                 >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|---------|"                                                 >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão    | \`${{ needs.setup.outputs.version }}\` |"          >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔍 Linguagem | TypeScript / JavaScript |"                         >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📋 Queries   | security-extended + security-and-quality |"       >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📍 Resultados | Security → Code scanning alerts |"               >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 2c — Security Scan (paralelo ao test e ao sonar)                  ║
+  # ║  STAGE 2c — Semgrep (paralelo ao test e ao CodeQL)                       ║
+  # ║  Rules-based SAST com regras da comunidade para TypeScript/Angular.      ║
+  # ║  Open-source, roda localmente, zero conta necessária.                    ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  semgrep:
+    name: 🔍 Semgrep
+    runs-on: ubuntu-latest
+    needs: [setup]
+    container:
+      image: semgrep/semgrep
+
+    steps:
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
+
+      - name: 🔍 Semgrep — TypeScript + Security + Angular
+        id: scan
+        run: |
+          semgrep scan \
+            --config "p/typescript" \
+            --config "p/javascript" \
+            --config "p/security-audit" \
+            --config "p/owasp-top-ten" \
+            --error \
+            --json-output=semgrep-results.json \
+            src/ 2>&1 | tee semgrep-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: 📊 Sumário — Semgrep
+        if: always()
+        run: |
+          FINDINGS=$(jq '.results | length' semgrep-results.json 2>/dev/null || echo "0")
+          ERRORS=$(jq '.errors | length' semgrep-results.json 2>/dev/null || echo "0")
+          STATUS=$([[ "${FINDINGS}" == "0" ]] && echo "✅ Nenhum finding" || echo "⚠️ ${FINDINGS} finding(s) encontrado(s)")
+
+          echo "## 🔍 Semgrep"                                                      >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                    >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Detalhe |"                                                 >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|---------|"                                                 >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão   | \`${{ needs.setup.outputs.version }}\` |"           >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📋 Regras   | typescript · javascript · security-audit · owasp |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔍 Findings | ${STATUS} |"                                        >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ -f semgrep-results.json && "${FINDINGS}" != "0" ]]; then
+            echo ""                                                                  >> "$GITHUB_STEP_SUMMARY"
+            echo "<details><summary>📋 Findings detalhados</summary>"              >> "$GITHUB_STEP_SUMMARY"
+            echo ""                                                                  >> "$GITHUB_STEP_SUMMARY"
+            echo '```json'                                                          >> "$GITHUB_STEP_SUMMARY"
+            jq '[.results[] | {file: .path, rule: .check_id, line: .start.line, message: .extra.message}]' \
+              semgrep-results.json 2>/dev/null | head -100                          >> "$GITHUB_STEP_SUMMARY"
+            echo '```'                                                              >> "$GITHUB_STEP_SUMMARY"
+            echo "</details>"                                                       >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: ❌ Falhar se findings críticos encontrados
+        if: steps.scan.outputs.exit_code != '0'
+        run: |
+          echo "❌ Semgrep encontrou issues — revise os findings acima."
+          exit 1
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  STAGE 2d — Security Scan (paralelo a todos acima)                       ║
   # ║  Auditoria de dependências. Falha em vulnerabilidades HIGH ou CRITICAL.  ║
-  # ║  Ajuste --audit-level conforme política de segurança do projeto.         ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   security:
     name: 🔒 Security Scan
@@ -291,12 +365,12 @@ jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 3 — Deploy DEV                                                    ║
-  # ║  Só executa após test (matrix) + security + sonar passarem.             ║
+  # ║  Só executa após test + security + code-analysis + semgrep passarem.   ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-dev:
     name: 🔵 Deploy → DEV
     runs-on: ubuntu-latest
-    needs: [setup, test, security, sonar]
+    needs: [setup, test, security, code-analysis, semgrep]
     if: ${{ inputs.skip_dev != true }}
     permissions:
       deployments: write
@@ -383,7 +457,7 @@ jobs:
   deploy-hml:
     name: 🟡 Deploy → HML
     runs-on: ubuntu-latest
-    needs: [setup, test, security, sonar]
+    needs: [setup, test, security, code-analysis, semgrep]
     if: ${{ inputs.skip_hml != true }}
     permissions:
       deployments: write
