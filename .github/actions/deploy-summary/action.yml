@@ -1,0 +1,71 @@
+name: 'Deploy Summary'
+description: 'Escreve relatório de deploy no GITHUB_STEP_SUMMARY.'
+
+inputs:
+  environment:
+    description: 'Ambiente (minúsculo): dev | hml | prd'
+    required: true
+  label:
+    description: 'Label de exibição: DEV | HML | PRODUÇÃO'
+    required: true
+  emoji:
+    description: 'Emoji colorido do ambiente: 🔵 | 🟡 | 🔴'
+    required: true
+  config:
+    description: 'Configuração ng build: development | staging | production'
+    required: true
+  version:
+    description: 'Versão semântica'
+    required: true
+  sha-short:
+    description: 'SHA curto do commit'
+    required: true
+  url:
+    description: 'URL do deploy Vercel'
+    required: false
+    default: ''
+  prev-version:
+    description: 'Versão anterior (none = sem anterior)'
+    required: false
+    default: 'none'
+  build-outcome:
+    description: 'Resultado do build: success | failure | skipped'
+    required: false
+    default: 'unknown'
+  health-status:
+    description: 'Status do health check: healthy | unhealthy'
+    required: false
+    default: 'unknown'
+  actor:
+    description: 'GitHub actor (@username)'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: 📊 Sumário — Deploy ${{ inputs.label }}
+      shell: bash
+      run: |
+        BUILD_ICON=$([[ "${{ inputs.build-outcome }}" == "success" ]] && echo "✅ Gerado" || echo "❌ Falhou")
+        HEALTH_ICON=$([[ "${{ inputs.health-status }}" == "healthy" ]] && echo "✅ Saudável" || echo "❌ Falhou")
+        PREV="${{ inputs.prev-version }}"
+
+        echo "## ${{ inputs.emoji }} Relatório Deploy — ${{ inputs.label }}"             >> "$GITHUB_STEP_SUMMARY"
+        echo ""                                                                            >> "$GITHUB_STEP_SUMMARY"
+        echo "| Item | Detalhe |"                                                         >> "$GITHUB_STEP_SUMMARY"
+        echo "|------|---------|"                                                         >> "$GITHUB_STEP_SUMMARY"
+        echo "| 🏷️ Versão   | \`${{ inputs.version }}\` |"                               >> "$GITHUB_STEP_SUMMARY"
+        echo "| 🔑 SHA      | \`${{ inputs.sha-short }}\` |"                             >> "$GITHUB_STEP_SUMMARY"
+        echo "| ⚙️ Config   | ng build --configuration=${{ inputs.config }} |"           >> "$GITHUB_STEP_SUMMARY"
+        [[ -n "${PREV}" && "${PREV}" != "none" ]] && \
+          echo "| 📦 Anterior | \`${PREV}\` |"                                           >> "$GITHUB_STEP_SUMMARY"
+        echo "| 🔗 URL      | ${{ inputs.url }} |"                                       >> "$GITHUB_STEP_SUMMARY"
+        echo "| 🏗️ Build    | ${BUILD_ICON} |"                                           >> "$GITHUB_STEP_SUMMARY"
+        echo "| 🏥 Health   | ${HEALTH_ICON} |"                                          >> "$GITHUB_STEP_SUMMARY"
+        echo "| 👤 Por      | @${{ inputs.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |" >> "$GITHUB_STEP_SUMMARY"
+        echo ""                                                                            >> "$GITHUB_STEP_SUMMARY"
+        if [[ -n "${PREV}" && "${PREV}" != "none" ]]; then
+          echo "> ↩️ Para rollback: versão anterior seria \`${PREV}\`."                  >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "> ↩️ Para rollback: use o workflow **↩️ Rollback** → ambiente \`${{ inputs.environment }}\`." >> "$GITHUB_STEP_SUMMARY"
+        fi

@@ -1,0 +1,48 @@
+name: 'Generate Angular Environment File'
+description: 'Gera src/environments/environment.<env>.ts com a API URL correta por ambiente.'
+
+inputs:
+  environment:
+    description: 'Ambiente: dev | hml | prd'
+    required: true
+  api-url:
+    description: 'URL da API para o ambiente (secret do chamador)'
+    required: true
+  version:
+    description: 'Versão semântica da aplicação'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: 🔧 Gerar environment.ts — ${{ inputs.environment }}
+      shell: bash
+      run: |
+        case "${{ inputs.environment }}" in
+          dev)
+            FILE="src/environments/environment.development.ts"
+            NAME="development"
+            PROD="false"
+            ;;
+          hml)
+            FILE="src/environments/environment.staging.ts"
+            NAME="staging"
+            PROD="false"
+            ;;
+          prd)
+            FILE="src/environments/environment.production.ts"
+            NAME="production"
+            PROD="true"
+            ;;
+        esac
+
+        cat > "${FILE}" << EOF
+        export const environment = {
+          name:       '${NAME}',
+          production: ${PROD},
+          apiUrl:     '${{ inputs.api-url }}',
+          version:    '${{ inputs.version }}',
+        };
+        EOF
+
+        echo "✅ ${FILE} gerado (env=${NAME}, version=${{ inputs.version }})"

@@ -1,0 +1,61 @@
+name: 'Health Check'
+description: 'Verifica se a URL responde com 200 ou 401 (Vercel Auth). Suporta retry com backoff.'
+
+inputs:
+  url:
+    description: 'URL a ser verificada'
+    required: true
+  retries:
+    description: 'Número máximo de tentativas'
+    required: false
+    default: '6'
+  wait:
+    description: 'Segundos de espera entre tentativas'
+    required: false
+    default: '10'
+  timeout:
+    description: 'Timeout em segundos por requisição curl'
+    required: false
+    default: '10'
+  strict:
+    description: 'true = falha hard se unhealthy (exit 1). false = só registra.'
+    required: false
+    default: 'false'
+
+outputs:
+  status:
+    description: '"healthy" ou "unhealthy"'
+    value: ${{ steps.check.outputs.status }}
+
+runs:
+  using: composite
+  steps:
+    - name: 🏥 Health Check — ${{ inputs.url }}
+      id: check
+      shell: bash
+      run: |
+        STATUS="unhealthy"
+        RETRIES=${{ inputs.retries }}
+        WAIT=${{ inputs.wait }}
+        TIMEOUT=${{ inputs.timeout }}
+
+        for i in $(seq 1 ${RETRIES}); do
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time ${TIMEOUT} "${{ inputs.url }}" || echo "000")
+
+          # 200 = OK | 401 = Vercel Deployment Protection ativa (app no ar)
+          if [[ "${HTTP_CODE}" == "200" || "${HTTP_CODE}" == "401" ]]; then
+            STATUS="healthy"
+            [[ "${HTTP_CODE}" == "401" ]] && echo "ℹ️ HTTP 401 — Vercel Auth ativa (normal em preview)"
+            echo "✅ Health check OK (tentativa ${i}/${RETRIES})"
+            break
+          fi
+
+          echo "⏳ Tentativa ${i}/${RETRIES} — HTTP ${HTTP_CODE}"; sleep ${WAIT}
+        done
+
+        echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+
+        if [[ "${{ inputs.strict }}" == "true" && "${STATUS}" == "unhealthy" ]]; then
+          echo "❌ Health check falhou após ${RETRIES} tentativas — considere rollback imediato!"
+          exit 1
+        fi

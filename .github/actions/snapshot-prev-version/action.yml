@@ -1,0 +1,50 @@
+name: 'Snapshot Previous Version'
+description: 'Busca a versão do último deploy bem-sucedido no ambiente via GitHub Deployments API.'
+
+inputs:
+  environment:
+    description: 'Ambiente: dev | hml | prd'
+    required: true
+
+outputs:
+  prev_version:
+    description: 'Versão do último deploy bem-sucedido (ou "none")'
+    value: ${{ steps.snapshot.outputs.prev_version }}
+  prev_url:
+    description: 'URL do último deploy bem-sucedido (ou vazio)'
+    value: ${{ steps.snapshot.outputs.prev_url }}
+
+runs:
+  using: composite
+  steps:
+    - name: 💾 Snapshot versão anterior — ${{ inputs.environment }}
+      id: snapshot
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const deployments = await github.rest.repos.listDeployments({
+            owner:       context.repo.owner,
+            repo:        context.repo.repo,
+            environment: '${{ inputs.environment }}',
+            per_page:    5
+          }).catch(() => ({ data: [] }));
+
+          let prevVersion = 'none', prevUrl = '';
+          for (const dep of deployments.data) {
+            const statuses = await github.rest.repos.listDeploymentStatuses({
+              owner:         context.repo.owner,
+              repo:          context.repo.repo,
+              deployment_id: dep.id,
+              per_page:      1
+            }).catch(() => ({ data: [] }));
+            const latest = statuses.data[0];
+            if (latest?.state === 'success') {
+              prevVersion = dep.description?.replace('Version: ', '') || dep.ref;
+              prevUrl     = latest.environment_url || '';
+              break;
+            }
+          }
+
+          core.setOutput('prev_version', prevVersion);
+          core.setOutput('prev_url',     prevUrl);
+          console.log(`Versão anterior em ${{ inputs.environment }}: ${prevVersion}`);

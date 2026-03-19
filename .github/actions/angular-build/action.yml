@@ -1,0 +1,23 @@
+name: 'Angular Build'
+description: 'Executa ng build com o script/configuração do ambiente e publica bundles no sumário.'
+
+inputs:
+  script:
+    description: 'Script npm a executar: build:dev | build:staging | build:prod'
+    required: true
+  label:
+    description: 'Label do ambiente para o sumário: DEV | HML | PRD'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: 🏗️ Build Angular — ${{ inputs.label }}
+      shell: bash
+      run: |
+        npm run ${{ inputs.script }}
+
+        echo "**📊 Bundles ${{ inputs.label }}:**" >> "$GITHUB_STEP_SUMMARY"
+        echo '```'                                  >> "$GITHUB_STEP_SUMMARY"
+        du -sh dist/**/* 2>/dev/null | sort -h      >> "$GITHUB_STEP_SUMMARY" || true
+        echo '```'                                  >> "$GITHUB_STEP_SUMMARY"
