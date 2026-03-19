@@ -13,9 +13,9 @@
 # ║      · code-analysis → CodeQL SAST (paralelo)                              ║
 # ║      · semgrep       → Semgrep rules TypeScript (paralelo)                 ║
 # ║    3 · deploy-dev + deploy-hml (paralelos, gatados por todos do stage 2)   ║
-# ║    4 · verify-dev (continue-on-error) + verify-hml (gate)                  ║
-# ║    5 · deploy-prd                                                            ║
-# ║    6 · verify-prd (rejeita gates pendentes via PAT_REJECT_TOKEN)            ║
+# ║    4 · approve-prd   → único gate humano (HML OK → libera PRD)             ║
+# ║    5 · deploy-prd    → deploy automático após aprovação                     ║
+# ║    6 · release       → GitHub Release + Slack + cleanup (automático)        ║
 # ║                                                                              ║
 # ║  Composite Actions (.github/actions/):                                      ║
 # ║    setup-deps            → node + npm ci + vercel CLI                      ║
@@ -586,40 +586,13 @@ jobs:
           health-status: ${{ steps.health.outputs.status }}
           actor:         ${{ github.actor }}
 
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 4a — Verificação DEV (continue-on-error)                          ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
-  verify-dev:
-    name: ✅ Verificação DEV
-    runs-on: ubuntu-latest
-    needs: [deploy-dev]
-    if: ${{ needs.deploy-dev.result == 'success' }}
-    continue-on-error: true  # Gate paralelo ao HML→PRD; timeout/cancel não afeta status geral
-
-    environment:
-      name: DEV - Verificar
-
-    steps:
-      - name: 🔍 Gate — aguardando verificação DEV
-        run: |
-          echo "## ✅ Gate de Verificação — DEV"                                       >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "Versão **\`${{ needs.deploy-dev.outputs.version }}\`** está live em DEV." >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ação | Resultado |"                                                  >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|-----------|"                                                  >> "$GITHUB_STEP_SUMMARY"
-          echo "| ✅ **FINALIZAR** | Ciclo DEV encerrado com sucesso |"               >> "$GITHUB_STEP_SUMMARY"
-          echo "| ↩️ **ROLLBACK**  | Rejeite e execute workflow **↩️ Rollback** → dev |" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🎉 DEV finalizado com sucesso
-        run: |
-          echo "✅ DEV aprovado por @${{ github.actor }} em $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 4b — Verificação HML — gate para liberar PRD                      ║
+  # ║  STAGE 4 — Aprovação → PRD (único gate humano do pipeline)               ║
+  # ║  Revisor confirma que HML está OK. Aprovação dispara deploy-prd.          ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   verify-hml:
-    name: ✅ Verificação HML — Liberar PRD
+    name: 🚀 Aprovação → PRD
     runs-on: ubuntu-latest
     needs: [deploy-hml]
     if: ${{ needs.deploy-hml.result == 'success' }}
@@ -633,47 +606,23 @@ jobs:
       name: HML - Liberar PRD
 
     steps:
-      - name: 🔍 Gate — aguardando aprovação da equipe
-        run: |
-          echo "## ✅ Gate de Verificação — HML"                                       >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "Versão **\`${{ needs.deploy-hml.outputs.version }}\`** está live em HML." >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ação | Resultado |"                                                  >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|-----------|"                                                  >> "$GITHUB_STEP_SUMMARY"
-          echo "| ✅ **APROVAR**  | Libera deploy em PRD automaticamente |"           >> "$GITHUB_STEP_SUMMARY"
-          echo "| ❌ **REJEITAR** | Execute workflow **↩️ Rollback** → \`hml\` |"     >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🎯 HML aprovada — registrando autorização para PRD
-        run: |
-          echo "✅ HML aprovada por @${{ github.actor }} em $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 📣 [FAKE] Notificar Slack — Deploy PRD iniciando
+      - name: 🔍 Aguardando aprovação da equipe
         run: |
           VERSION="${{ needs.deploy-hml.outputs.version }}"
-          ACTOR="${{ github.actor }}"
-          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          URL="${{ needs.deploy-hml.outputs.url }}"
 
-          cat << SLACK
-          {
-            "channel": "#deployments",
-            "text": "🚀 *CECCOFF — Deploy PRD Iniciando*",
-            "attachments": [{
-              "color": "#439FE0",
-              "fields": [
-                { "title": "Versão",         "value": "${VERSION}",   "short": true },
-                { "title": "Autorizado por", "value": "@${ACTOR}",    "short": true },
-                { "title": "Horário",        "value": "${TIMESTAMP}", "short": true }
-              ]
-            }]
-          }
-          SLACK
+          echo "## 🚀 Gate de Aprovação — PRD"                                              >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                             >> "$GITHUB_STEP_SUMMARY"
+          echo "Versão **\`${VERSION}\`** validada em HML e aguardando aprovação para PRD." >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                             >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ação | Resultado |"                                                        >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|-----------|"                                                        >> "$GITHUB_STEP_SUMMARY"
+          echo "| ✅ **APROVAR**  | Dispara deploy em PRD automaticamente |"                >> "$GITHUB_STEP_SUMMARY"
+          echo "| ❌ **REJEITAR** | Pipeline encerra — execute **↩️ Rollback** → \`hml\` se necessário |" >> "$GITHUB_STEP_SUMMARY"
 
-          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
-          #   -H 'Content-type: application/json' \
-          #   --data "{\"text\":\"🚀 Deploy PRD iniciando — \`${VERSION}\` por @${ACTOR}\"}"
-
-          echo "✅ [FAKE] Notificação PRÉ-PRD enviada ao Slack"
+      - name: ✅ HML aprovada — liberando PRD
+        run: |
+          echo "🚀 PRD liberado por @${{ github.actor }} em $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 5 — Deploy PRD                                                    ║
@@ -779,82 +728,75 @@ jobs:
           actor:         ${{ github.actor }}
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 6 — Verificação PRD — Gate final                                  ║
-  # ║  APROVADO  → Slack sucesso + rejeita gates pendentes (verify-dev)        ║
-  # ║  REJEITADO → job cancelado → use workflow ↩️ Rollback                    ║
+  # ║  STAGE 6 — Release (automático)                                          ║
+  # ║  Sem gate humano. Executa assim que PRD está live:                        ║
+  # ║    · GitHub Release com changelog gerado automaticamente (--generate-notes)║
+  # ║    · Notificação Slack #deployments                                       ║
+  # ║    · Limpeza de gates pendentes via PAT_REJECT_TOKEN                     ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
-  verify-prd:
-    name: 🎯 Verificação PRD — Finalizar Release
+  release:
+    name: 🎉 Release
     runs-on: ubuntu-latest
     needs: [deploy-prd]
     if: ${{ needs.deploy-prd.result == 'success' }}
     permissions:
-      actions:     write
+      contents:    write  # criar GitHub Release
+      actions:     write  # rejeitar gates pendentes
       deployments: write
 
-    environment:
-      name: PRD - Finalizar Release
-
     steps:
-      - name: 🔍 Gate — aguardando aprovação final
-        run: |
-          echo "## 🎯 Gate de Verificação Final — PRODUÇÃO"                               >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                          >> "$GITHUB_STEP_SUMMARY"
-          echo "⚡ **Versão \`${{ needs.deploy-prd.outputs.version }}\` está LIVE em Produção!**" >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                          >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ação | Resultado |"                                                     >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|-----------|"                                                     >> "$GITHUB_STEP_SUMMARY"
-          echo "| ✅ **APROVAR**  | Notifica Slack sucesso e encerra pipeline |"         >> "$GITHUB_STEP_SUMMARY"
-          echo "| ❌ **REJEITAR** | Pipeline encerra — use workflow ↩️ Rollback se necessário |" >> "$GITHUB_STEP_SUMMARY"
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: 📣 [FAKE] Notificar Slack — Deploy PRD SUCESSO
+      - name: 🏷️ Criar GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ needs.deploy-prd.outputs.version }}"
+
+          # Pré-release se tiver sufixo semântico (ex: v1.0.0-rc.1, v1.0.0-hotfix.1)
+          PRERELEASE_FLAG=""
+          [[ "${VERSION}" == *"-"* ]] && PRERELEASE_FLAG="--prerelease"
+
+          # --generate-notes: changelog automático a partir dos PRs desde a tag anterior
+          gh release create "${VERSION}" \
+            --title "${VERSION}" \
+            --generate-notes \
+            ${PRERELEASE_FLAG} \
+            --latest \
+            2>/dev/null \
+            || echo "ℹ️ Release ${VERSION} já existe — ignorando."
+
+      - name: 📣 Notificar Slack — PRD Live
         run: |
           VERSION="${{ needs.deploy-prd.outputs.version }}"
           SHA="${{ needs.deploy-prd.outputs.sha_short }}"
+          URL="${{ needs.deploy-prd.outputs.url }}"
           ACTOR="${{ github.actor }}"
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-
-          cat << SLACK
-          {
-            "channel": "#deployments",
-            "text": "✅ *CECCOFF — Deploy PRD Concluído com Sucesso*",
-            "attachments": [{
-              "color": "#36a64f",
-              "fields": [
-                { "title": "Versão",       "value": "${VERSION}",   "short": true },
-                { "title": "SHA",          "value": "${SHA}",       "short": true },
-                { "title": "Aprovado por", "value": "@${ACTOR}",    "short": true },
-                { "title": "Horário",      "value": "${TIMESTAMP}", "short": true }
-              ]
-            }]
-          }
-          SLACK
+          REPO="${{ github.repository }}"
 
           # curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
           #   -H 'Content-type: application/json' \
-          #   --data "{\"text\":\"✅ Deploy PRD *${VERSION}* concluído por @${ACTOR}\"}"
+          #   --data "{
+          #     \"text\": \"✅ *CECCOFF \`${VERSION}\`* está live em produção\",
+          #     \"attachments\": [{
+          #       \"color\": \"#36a64f\",
+          #       \"fields\": [
+          #         { \"title\": \"Versão\", \"value\": \"${VERSION}\", \"short\": true },
+          #         { \"title\": \"URL\",    \"value\": \"${URL}\",     \"short\": true },
+          #         { \"title\": \"SHA\",    \"value\": \"${SHA}\",     \"short\": true },
+          #         { \"title\": \"Por\",    \"value\": \"@${ACTOR}\",  \"short\": true }
+          #       ],
+          #       \"footer\": \"<https://github.com/${REPO}/releases/tag/${VERSION}|Ver Release Notes>\"
+          #     }]
+          #   }"
 
-          echo "✅ [FAKE] Notificação de SUCESSO enviada ao Slack"
+          echo "✅ [FAKE] Slack #deployments: ${VERSION} live em PRD por @${ACTOR} às ${TIMESTAMP}"
 
-      - name: 🎉 Release encerrado com sucesso
-        run: |
-          echo "## 🎉 Release Concluído!"                                              >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ambiente | Status |"                                                 >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|--------|"                                                 >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔵 DEV   | ✅ Deployado e Verificado |"                             >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🟡 HML   | ✅ Deployado e Verificado |"                             >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔴 PRD   | ✅ Deployado e Verificado |"                             >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Detalhe |"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|---------|"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão | \`${{ needs.deploy-prd.outputs.version }}\` |"             >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔑 SHA    | \`${{ needs.deploy-prd.outputs.sha_short }}\` |"           >> "$GITHUB_STEP_SUMMARY"
-          echo "| 👤 Por    | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |" >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "> 📣 Notificação de sucesso enviada ao Slack."                         >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🧹 Rejeitar gates pendentes (ex. verify-dev)
+      - name: 🧹 Rejeitar gates pendentes
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.PAT_REJECT_TOKEN }}
@@ -866,7 +808,7 @@ jobs:
             });
 
             if (pending.length === 0) {
-              console.log('✅ Nenhum deployment pendente — nada a rejeitar.');
+              console.log('✅ Nenhum gate pendente — nada a rejeitar.');
               return;
             }
 
@@ -880,13 +822,38 @@ jobs:
                 run_id:          context.runId,
                 environment_ids: envIds,
                 state:           'rejected',
-                comment:         '🤖 Rejeitado automaticamente — PRD aprovado com sucesso.'
+                comment:         '🤖 Rejeitado automaticamente — release concluído com sucesso.'
               });
               console.log(`⏹️ Gates rejeitados: ${envNames}`);
             } catch (e) {
               if (e.status === 422) {
-                console.log(`ℹ️ Gates já resolvidos (${envNames}) — nada a rejeitar.`);
+                console.log('ℹ️ Gates já resolvidos — nada a fazer.');
               } else {
                 throw e;
               }
             }
+
+      - name: 📊 Sumário — Release
+        run: |
+          VERSION="${{ needs.deploy-prd.outputs.version }}"
+          SHA="${{ needs.deploy-prd.outputs.sha_short }}"
+          URL="${{ needs.deploy-prd.outputs.url }}"
+          REPO="${{ github.repository }}"
+
+          echo "## 🎉 Release \`${VERSION}\` — Concluído"                                                    >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                                               >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ambiente | Status |"                                                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|--------|"                                                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔵 DEV   | ✅ Deployado |"                                                                   >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🟡 HML   | ✅ Aprovado  |"                                                                   >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔴 PRD   | ✅ Live      |"                                                                   >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                                               >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Detalhe |"                                                                            >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|---------|"                                                                            >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão  | \`${VERSION}\` |"                                                               >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔑 SHA     | \`${SHA}\` |"                                                                   >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔗 URL     | ${URL} |"                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📦 Release | [${VERSION}](https://github.com/${REPO}/releases/tag/${VERSION}) |"            >> "$GITHUB_STEP_SUMMARY"
+          echo "| 👤 Por     | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |"                     >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                                               >> "$GITHUB_STEP_SUMMARY"
+          echo "> 📣 Slack notificado. GitHub Release criado automaticamente com changelog."                  >> "$GITHUB_STEP_SUMMARY"
