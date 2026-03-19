@@ -1,0 +1,253 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  ♻️  REUSABLE — Deploy Vercel (Build Angular + Deploy + Health + Register)  ║
+# ║  Chamado por: pipeline.yml                                                  ║
+# ║  Parâmetros: environment (dev|hml|prd), version, sha-short                  ║
+# ║  Deriva internamente: config, build-script, flags Vercel, retentativas      ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+name: ♻️ Deploy → Vercel
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Ambiente alvo: dev | hml | prd'
+        type: string
+        required: true
+      environment-name:
+        description: 'Nome do GitHub Environment (ex: DEV - Deploy)'
+        type: string
+        required: true
+      version:
+        description: 'Tag semântica (ex: v1.2.3)'
+        type: string
+        required: true
+      sha-short:
+        description: 'SHA curto do commit'
+        type: string
+        required: true
+      app-name:
+        description: 'Nome da aplicação (Vercel project slug)'
+        type: string
+        default: 'ceccoff-frontend'
+      node-version:
+        description: 'Versão do Node.js'
+        type: string
+        default: '20.x'
+    outputs:
+      version:
+        description: 'Tag deployada'
+        value: ${{ jobs.deploy.outputs.version }}
+      sha_short:
+        description: 'SHA curto deployado'
+        value: ${{ jobs.deploy.outputs.sha_short }}
+      url:
+        description: 'URL do deploy Vercel'
+        value: ${{ jobs.deploy.outputs.url }}
+      prev_version:
+        description: 'Versão anterior (para rollback)'
+        value: ${{ jobs.deploy.outputs.prev_version }}
+
+jobs:
+  deploy:
+    name: >-
+      ${{
+        inputs.environment == 'dev' && '🔵 Deploy → DEV' ||
+        inputs.environment == 'hml' && '🟡 Deploy → HML' ||
+        '🔴 Deploy → PRD'
+      }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      deployments: write
+      contents: read
+
+    outputs:
+      version:      ${{ inputs.version }}
+      sha_short:    ${{ inputs.sha-short }}
+      url:          ${{ steps.deploy.outputs.url }}
+      prev_version: ${{ steps.snapshot.outputs.prev_version }}
+
+    environment:
+      name: ${{ inputs.environment-name }}
+      url:  ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Setup Node + npm ci + Vercel CLI
+        uses: ./.github/actions/setup-deps
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      # ── Captura versão atual antes de sobrescrever (HML e PRD) ──────────────
+      - name: 💾 Snapshot versão anterior
+        id: snapshot
+        if: ${{ inputs.environment != 'dev' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const env = '${{ inputs.environment }}';
+            const deployments = await github.rest.repos.listDeployments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              environment: env, per_page: 5
+            }).catch(() => ({ data: [] }));
+
+            let prevVersion = 'none', prevUrl = '';
+            for (const dep of deployments.data) {
+              const statuses = await github.rest.repos.listDeploymentStatuses({
+                owner: context.repo.owner, repo: context.repo.repo,
+                deployment_id: dep.id, per_page: 1
+              }).catch(() => ({ data: [] }));
+              const latest = statuses.data[0];
+              if (latest?.state === 'success') {
+                prevVersion = dep.description?.replace('Version: ', '') || dep.ref;
+                prevUrl = latest.environment_url || '';
+                break;
+              }
+            }
+            core.setOutput('prev_version', prevVersion);
+            core.setOutput('prev_url', prevUrl);
+            console.log(`Versão anterior em ${env}: ${prevVersion}`);
+
+      # ── Gera environment.ts por ambiente com secret correto ─────────────────
+      - name: 🔧 Gerar environment.ts com secrets
+        run: |
+          case "${{ inputs.environment }}" in
+            dev)
+              cat > src/environments/environment.development.ts << 'EOF'
+              export const environment = {
+                name:       'development',
+                production: false,
+                apiUrl:     '${{ secrets.DEV_API_URL }}',
+                version:    '${{ inputs.version }}',
+              };
+              EOF
+              ;;
+            hml)
+              cat > src/environments/environment.staging.ts << 'EOF'
+              export const environment = {
+                name:       'staging',
+                production: false,
+                apiUrl:     '${{ secrets.HML_API_URL }}',
+                version:    '${{ inputs.version }}',
+              };
+              EOF
+              ;;
+            prd)
+              cat > src/environments/environment.production.ts << 'EOF'
+              export const environment = {
+                name:       'production',
+                production: true,
+                apiUrl:     '${{ secrets.PRD_API_URL }}',
+                version:    '${{ inputs.version }}',
+              };
+              EOF
+              ;;
+          esac
+
+      # ── Build Angular (configuração derivada do ambiente) ───────────────────
+      - name: 🏗️ Build Angular
+        id: build
+        run: |
+          case "${{ inputs.environment }}" in
+            dev) SCRIPT="build:dev";     CONFIG="development" ;;
+            hml) SCRIPT="build:staging"; CONFIG="staging"     ;;
+            prd) SCRIPT="build:prod";    CONFIG="production"  ;;
+          esac
+          npm run ${SCRIPT}
+          echo "**📊 Bundles ${{ inputs.environment }}:**" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          du -sh dist/**/* 2>/dev/null | sort -h >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
+        uses: ./.github/actions/vercel-build-output
+        with:
+          app-name: ${{ inputs.app-name }}
+
+      # ── Deploy Vercel (preview para dev/hml, --prod para prd) ───────────────
+      - name: 🚀 Deploy → Vercel
+        id: deploy
+        env:
+          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+        run: |
+          # Seleciona PROJECT_ID e flags por ambiente
+          case "${{ inputs.environment }}" in
+            dev) PROJECT_ID="${{ secrets.VERCEL_PROJECT_ID_DEV }}"; FLAGS=""       ;;
+            hml) PROJECT_ID="${{ secrets.VERCEL_PROJECT_ID_HML }}"; FLAGS=""       ;;
+            prd) PROJECT_ID="${{ secrets.VERCEL_PROJECT_ID_PRD }}"; FLAGS="--prod" ;;
+          esac
+
+          DEPLOY_URL=$(VERCEL_PROJECT_ID="${PROJECT_ID}" vercel deploy --prebuilt ${FLAGS} \
+            --token="$VERCEL_TOKEN" --yes \
+            --meta version="${{ inputs.version }}" \
+            --meta sha="${{ inputs.sha-short }}" \
+            --meta environment="${{ inputs.environment }}" \
+            --meta prev_version="${{ steps.snapshot.outputs.prev_version || 'none' }}" \
+            2>/dev/null)
+
+          if [[ -z "$DEPLOY_URL" ]]; then
+            echo "❌ Vercel não retornou URL — verifique VERCEL_TOKEN, VERCEL_ORG_ID e VERCEL_PROJECT_ID_${{ inputs.environment }}"
+            VERCEL_PROJECT_ID="${PROJECT_ID}" vercel deploy --prebuilt ${FLAGS} --token="$VERCEL_TOKEN" --yes 2>&1 || true
+            exit 1
+          fi
+          echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
+          echo "✅ Deploy ${{ inputs.environment }}: ${DEPLOY_URL}"
+
+      - name: 💾 Registrar deployment no GitHub Deployments API
+        uses: ./.github/actions/register-deployment
+        with:
+          environment: ${{ inputs.environment }}
+          version:     ${{ inputs.version }}
+          url:         ${{ steps.deploy.outputs.url }}
+
+      # ── Health Check (DEV: 6 tentativas / HML+PRD: 10 tentativas) ───────────
+      - name: 🏥 Health Check
+        id: health
+        run: |
+          URL="${{ steps.deploy.outputs.url }}"
+          STATUS="unhealthy"
+          case "${{ inputs.environment }}" in
+            dev) RETRIES=6;  WAIT=10; TIMEOUT=10 ;;
+            *)   RETRIES=10; WAIT=15; TIMEOUT=15 ;;
+          esac
+
+          for i in $(seq 1 ${RETRIES}); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time ${TIMEOUT} "${URL}" || echo "000")
+            if [[ "${HTTP_CODE}" == "200" || "${HTTP_CODE}" == "401" ]]; then
+              STATUS="healthy"
+              [[ "${HTTP_CODE}" == "401" ]] && echo "ℹ️ HTTP 401 — Vercel Auth ativa (normal em preview)"
+              break
+            fi
+            echo "⏳ Tentativa ${i}/${RETRIES} — HTTP ${HTTP_CODE}"; sleep ${WAIT}
+          done
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+
+          # PRD e HML: falha hard se unhealthy
+          if [[ "${{ inputs.environment }}" != "dev" && "${STATUS}" == "unhealthy" ]]; then
+            echo "❌ Health check falhou — considere rollback imediato!"; exit 1
+          fi
+
+      - name: 📊 Sumário — Deploy
+        if: always()
+        run: |
+          case "${{ inputs.environment }}" in
+            dev) EMOJI="🔵"; LABEL="DEV"      ;;
+            hml) EMOJI="🟡"; LABEL="HML"      ;;
+            prd) EMOJI="🔴"; LABEL="PRODUÇÃO" ;;
+          esac
+          echo "## ${EMOJI} Relatório Deploy — ${LABEL}"                                   >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                            >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Detalhe |"                                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|---------|"                                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão   | \`${{ inputs.version }}\` |"                               >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔑 SHA      | \`${{ inputs.sha-short }}\` |"                             >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔗 URL      | ${{ steps.deploy.outputs.url }} |"                         >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📦 Anterior | \`${{ steps.snapshot.outputs.prev_version || 'N/A' }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏗️ Build    | $([[ '${{ steps.build.outcome }}' == 'success' ]] && echo '✅ Gerado' || echo '❌ Falhou') |"    >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏥 Health   | $([[ '${{ steps.health.outputs.status }}' == 'healthy' ]] && echo '✅ Saudável' || echo '⚠️ Verificar') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 👤 Por      | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                            >> "$GITHUB_STEP_SUMMARY"
+          echo "> ↩️ Para rollback: use o workflow **↩️ Rollback** → ambiente \`${{ inputs.environment }}\`." >> "$GITHUB_STEP_SUMMARY"

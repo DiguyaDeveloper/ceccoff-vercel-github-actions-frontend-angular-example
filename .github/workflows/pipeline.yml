@@ -1,16 +1,18 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║         🚀 PIPELINE CI/CD — CECCOFF FRONTEND (Angular 19 + Vercel)        ║
+# ║         🚀 PIPELINE CI/CD — CECCOFF FRONTEND (Angular 19 + Vercel)         ║
 # ║                                                                              ║
-# ║  Estratégia: Trunk-Based Development com Tags Semânticas                    ║
-# ║  Build:      Separado por ambiente via angular.json fileReplacements        ║
-# ║              environment.<env>.ts gerado em CI com secrets do GitHub        ║
-# ║  Ambientes:  DEV (independente) → HML → PRD (sequencial)                   ║
-# ║  Aprovações: Todas as etapas requerem aprovação manual                      ║
-# ║  Rollback:   Rastreia tag deployada por ambiente via GitHub Deployments API ║
+# ║  Arquitetura: Enterprise Orchestrator + Reusable Workflows                  ║
+# ║  Estratégia:  Trunk-Based Development com Tags Semânticas                   ║
+# ║  Ambientes:   DEV (independente) → HML → PRD (sequencial)                  ║
 # ║                                                                              ║
-# ║  Composite Actions (reutilizadas nos 3 jobs de deploy):                     ║
-# ║    .github/actions/setup-deps          → checkout + node + npm ci + vercel ║
-# ║    .github/actions/vercel-build-output → prepara .vercel/output/           ║
+# ║  Workflows reutilizáveis:                                                    ║
+# ║    _ci.yml     → Lint, testes e cobertura                                   ║
+# ║    _deploy.yml → Build Angular + Deploy Vercel + Health Check               ║
+# ║    _gate.yml   → Gate de aprovação manual + rejeição de pendentes           ║
+# ║                                                                              ║
+# ║  Composite Actions (usadas dentro de _deploy.yml):                          ║
+# ║    .github/actions/setup-deps          → Node + npm ci + Vercel CLI        ║
+# ║    .github/actions/vercel-build-output → Prepara .vercel/output/           ║
 # ║    .github/actions/register-deployment → GitHub Deployments API            ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
@@ -49,735 +51,100 @@ concurrency:
   group: pipeline-${{ github.ref }}
   cancel-in-progress: false
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 🌍 VARIÁVEIS GLOBAIS
-# ─────────────────────────────────────────────────────────────────────────────
-env:
-  NODE_VERSION: '20.x'
-  APP_NAME: 'ceccoff-frontend'
-
 # ══════════════════════════════════════════════════════════════════════════════
-# 📋 JOBS
+# 📋 JOBS — Apenas orquestração, zero lógica de negócio
+#
+#  Grafo visual (GitHub Actions UI):
+#
+#  ci ──┬── deploy-dev ── verify-dev (continue-on-error)
+#       │
+#       └── deploy-hml ── verify-hml ── deploy-prd ── verify-prd
+#
 # ══════════════════════════════════════════════════════════════════════════════
 jobs:
 
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  📦 CI — Lint, testes e validação (SEM build de produção)                ║
-  # ║  O build de produção acontece individualmente em cada job de deploy,     ║
-  # ║  pois environment.<env>.ts é gerado em CI com secrets por ambiente.      ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
+  # ── 📦 CI ──────────────────────────────────────────────────────────────────
   ci:
-    name: 📦 CI — Lint & Testes
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/_ci.yml
+    with:
+      force-version: ${{ inputs.force_version || '' }}
+      node-version: '20.x'
 
-    outputs:
-      version:   ${{ steps.version.outputs.tag }}
-      sha_short: ${{ steps.version.outputs.sha }}
-
-    steps:
-      - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: 🏷️ Detectar versão
-        id: version
-        run: |
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-          elif [[ -n "${{ inputs.force_version }}" ]]; then
-            TAG="${{ inputs.force_version }}"
-          else
-            TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo 'v0.0.0-dev')"
-          fi
-          SHA="${GITHUB_SHA::7}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "### 🏷️ Versão: \`${TAG}\` — SHA: \`${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: 📥 Instalar dependências
-        id: install
-        run: npm ci --prefer-offline
-
-      - name: 🔍 Lint & Type Check
-        id: lint
-        run: npm run lint
-
-      - name: 🧪 Testes unitários
-        id: tests
-        run: npm run test:ci
-
-      - name: 📈 Publicar cobertura no sumário
-        if: always()
-        run: |
-          SUMMARY_FILE="coverage/coverage-summary.json"
-          if [[ -f "$SUMMARY_FILE" ]]; then
-            STMTS=$(jq '.total.statements.pct' "$SUMMARY_FILE")
-            BRANCH=$(jq '.total.branches.pct'  "$SUMMARY_FILE")
-            FUNCS=$(jq  '.total.functions.pct'  "$SUMMARY_FILE")
-            LINES=$(jq  '.total.lines.pct'      "$SUMMARY_FILE")
-            echo "## 📈 Coverage Report"                          >> "$GITHUB_STEP_SUMMARY"
-            echo ""                                                >> "$GITHUB_STEP_SUMMARY"
-            echo "| Métrica    | Cobertura |"                     >> "$GITHUB_STEP_SUMMARY"
-            echo "|------------|-----------|"                     >> "$GITHUB_STEP_SUMMARY"
-            echo "| Statements | ${STMTS}% |"                    >> "$GITHUB_STEP_SUMMARY"
-            echo "| Branches   | ${BRANCH}% |"                   >> "$GITHUB_STEP_SUMMARY"
-            echo "| Functions  | ${FUNCS}% |"                    >> "$GITHUB_STEP_SUMMARY"
-            echo "| Lines      | ${LINES}% |"                    >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "⚠️ coverage-summary.json não encontrado."      >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: 📦 Upload relatório de coverage (artefato)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report-${{ steps.version.outputs.sha }}
-          path: coverage/
-          retention-days: 14
-
-      - name: 📊 Sumário — CI
-        if: always()
-        run: |
-          echo "## 📦 Relatório CI"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item      | Status |"                                                >> "$GITHUB_STEP_SUMMARY"
-          echo "|-----------|--------|"                                                >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão | \`${{ steps.version.outputs.tag }}\` |"                 >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔑 SHA    | \`${{ steps.version.outputs.sha }}\` |"                 >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔍 Lint   | $([[ '${{ steps.lint.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🧪 Testes | $([[ '${{ steps.tests.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 👤 Por    | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |" >> "$GITHUB_STEP_SUMMARY"
-
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🔵 DEPLOY DEV                                                            ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
+  # ── 🔵 DEV ────────────────────────────────────────────────────────────────
   deploy-dev:
-    name: 🔵 Deploy → DEV
-    runs-on: ubuntu-latest
     needs: [ci]
     if: ${{ inputs.skip_dev != true }}
-    permissions:
-      deployments: write
-      contents: read
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment:      dev
+      environment-name: DEV - Deploy
+      version:          ${{ needs.ci.outputs.version }}
+      sha-short:        ${{ needs.ci.outputs.sha_short }}
+      app-name:         ceccoff-frontend
+      node-version:     '20.x'
+    secrets: inherit
 
-    outputs:
-      version: ${{ needs.ci.outputs.version }}
-      url:     ${{ steps.deploy.outputs.url }}
-
-    environment:
-      name: DEV - Deploy
-      url: ${{ steps.deploy.outputs.url }}
-
-    steps:
-      - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
-
-      - name: 🛠️ Setup Node + npm ci + Vercel CLI
-        uses: ./.github/actions/setup-deps
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: 🔧 Gerar environment.development.ts com secrets — DEV
-        run: |
-          cat > src/environments/environment.development.ts << 'EOF'
-          export const environment = {
-            name:       'development',
-            production: false,
-            apiUrl:     '${{ secrets.DEV_API_URL }}',
-            version:    '${{ needs.ci.outputs.version }}',
-          };
-          EOF
-
-      - name: 🏗️ Build Angular — DEV (ng build --configuration=development)
-        id: build
-        run: |
-          npm run build:dev
-          echo "**📊 Bundles DEV:**" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          du -sh dist/**/* 2>/dev/null | sort -h >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
-        uses: ./.github/actions/vercel-build-output
-        with:
-          app-name: ${{ env.APP_NAME }}
-
-      - name: 🔵 Deploy em DEV (Vercel Preview)
-        id: deploy
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
-        run: |
-          DEPLOY_URL=$(vercel deploy --prebuilt \
-            --token="$VERCEL_TOKEN" --yes \
-            --meta version="${{ needs.ci.outputs.version }}" \
-            --meta sha="${{ needs.ci.outputs.sha_short }}" \
-            --meta environment=dev \
-            2>/dev/null)
-
-          if [[ -z "$DEPLOY_URL" ]]; then
-            echo "❌ Vercel não retornou URL — verifique VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID_DEV"
-            vercel deploy --prebuilt --token="$VERCEL_TOKEN" --yes 2>&1 || true
-            exit 1
-          fi
-          echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
-          echo "✅ Deploy DEV: ${DEPLOY_URL}"
-
-      - name: 💾 Registrar deployment no GitHub Deployments API
-        uses: ./.github/actions/register-deployment
-        with:
-          environment: dev
-          version: ${{ needs.ci.outputs.version }}
-          url: ${{ steps.deploy.outputs.url }}
-
-      - name: 🏥 Health Check DEV
-        id: health
-        run: |
-          URL="${{ steps.deploy.outputs.url }}"
-          STATUS="unhealthy"
-          for i in {1..6}; do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${URL}" || echo "000")
-            # 200 = OK  |  401 = Vercel Deployment Protection ativa (servidor no ar)
-            if [[ "${HTTP_CODE}" == "200" || "${HTTP_CODE}" == "401" ]]; then
-              STATUS="healthy"
-              [[ "${HTTP_CODE}" == "401" ]] && echo "ℹ️ HTTP 401 — Vercel Auth ativa (normal em preview)"
-              break
-            fi
-            echo "⏳ Tentativa ${i}/6 — HTTP ${HTTP_CODE}"; sleep 10
-          done
-          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
-
-      - name: 📊 Sumário — Deploy DEV
-        if: always()
-        run: |
-          echo "## 🔵 Relatório Deploy — DEV"                                         >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Detalhe |"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|---------|"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão | \`${{ needs.ci.outputs.version }}\` |"                  >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔑 SHA    | \`${{ needs.ci.outputs.sha_short }}\` |"                >> "$GITHUB_STEP_SUMMARY"
-          echo "| ⚙️ Config  | ng build --configuration=development |"                 >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔗 URL    | ${{ steps.deploy.outputs.url }} |"                      >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏗️ Build  | $([[ '${{ steps.build.outcome }}' == 'success' ]] && echo '✅ Gerado' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏥 Health | $([[ '${{ steps.health.outputs.status }}' == 'healthy' ]] && echo '✅ Saudável' || echo '⚠️ Verificar') |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 👤 Por    | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |" >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "> ↩️ Para rollback: use o workflow **↩️ Rollback** → ambiente \`dev\`." >> "$GITHUB_STEP_SUMMARY"
-
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  ✅ VERIFICAÇÃO DEV — Gate pós-deploy                                    ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
   verify-dev:
-    name: ✅ Verificação DEV — Finalizar ou Rollback
-    runs-on: ubuntu-latest
     needs: [deploy-dev]
     if: ${{ needs.deploy-dev.result == 'success' }}
-    continue-on-error: true  # Gate paralelo ao HML→PRD; timeout/cancel não afeta status geral
+    continue-on-error: true   # Gate paralelo — timeout/cancel não afeta status geral
+    uses: ./.github/workflows/_gate.yml
+    with:
+      environment:      dev
+      environment-name: DEV - Verificar
+      version:          ${{ needs.deploy-dev.outputs.version }}
+      sha-short:        ${{ needs.deploy-dev.outputs.sha_short }}
+      is-final:         false
+    secrets: inherit
 
-    environment:
-      name: DEV - Verificar
-
-    steps:
-      - name: 🔍 Gate — aguardando verificação DEV
-        run: |
-          echo "## ✅ Gate de Verificação — DEV"                                       >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "Versão **\`${{ needs.deploy-dev.outputs.version }}\`** está live em DEV." >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ação | Resultado |"                                                  >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|-----------|"                                                  >> "$GITHUB_STEP_SUMMARY"
-          echo "| ✅ **FINALIZAR** | Ciclo DEV encerrado com sucesso |"               >> "$GITHUB_STEP_SUMMARY"
-          echo "| ↩️ **ROLLBACK**  | Rejeite e execute workflow **↩️ Rollback** → dev |" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🎉 DEV finalizado com sucesso
-        run: |
-          echo "✅ DEV aprovado por @${{ github.actor }} em $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
-
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🟡 DEPLOY HML                                                            ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
+  # ── 🟡 HML ────────────────────────────────────────────────────────────────
   deploy-hml:
-    name: 🟡 Deploy → HML
-    runs-on: ubuntu-latest
     needs: [ci]
     if: ${{ inputs.skip_hml != true }}
-    permissions:
-      deployments: write
-      contents: read
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment:      hml
+      environment-name: HML - Deploy
+      version:          ${{ needs.ci.outputs.version }}
+      sha-short:        ${{ needs.ci.outputs.sha_short }}
+      app-name:         ceccoff-frontend
+      node-version:     '20.x'
+    secrets: inherit
 
-    outputs:
-      version:      ${{ needs.ci.outputs.version }}
-      sha_short:    ${{ needs.ci.outputs.sha_short }}
-      url:          ${{ steps.deploy.outputs.url }}
-      prev_version: ${{ steps.snapshot.outputs.prev_version }}
-
-    environment:
-      name: HML - Deploy
-      url: ${{ steps.deploy.outputs.url }}
-
-    steps:
-      - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
-
-      - name: 🛠️ Setup Node + npm ci + Vercel CLI
-        uses: ./.github/actions/setup-deps
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      # ── Captura versão atual de HML antes de sobrescrever (para rollback) ──
-      - name: 💾 Snapshot versão anterior de HML
-        id: snapshot
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const deployments = await github.rest.repos.listDeployments({
-              owner: context.repo.owner, repo: context.repo.repo,
-              environment: 'hml', per_page: 5
-            }).catch(() => ({ data: [] }));
-
-            let prevVersion = 'none', prevUrl = '';
-            for (const dep of deployments.data) {
-              const statuses = await github.rest.repos.listDeploymentStatuses({
-                owner: context.repo.owner, repo: context.repo.repo,
-                deployment_id: dep.id, per_page: 1
-              }).catch(() => ({ data: [] }));
-              const latest = statuses.data[0];
-              if (latest?.state === 'success') {
-                prevVersion = dep.description?.replace('Version: ', '') || dep.ref;
-                prevUrl = latest.environment_url || '';
-                break;
-              }
-            }
-            core.setOutput('prev_version', prevVersion);
-            core.setOutput('prev_url', prevUrl);
-            console.log(`Versão anterior em HML: ${prevVersion}`);
-
-      - name: 🔧 Gerar environment.staging.ts com secrets — HML
-        run: |
-          cat > src/environments/environment.staging.ts << 'EOF'
-          export const environment = {
-            name:       'staging',
-            production: false,
-            apiUrl:     '${{ secrets.HML_API_URL }}',
-            version:    '${{ needs.ci.outputs.version }}',
-          };
-          EOF
-
-      - name: 🏗️ Build Angular — HML (ng build --configuration=staging)
-        id: build
-        run: |
-          npm run build:staging
-          echo "**📊 Bundles HML:**" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          du -sh dist/**/* 2>/dev/null | sort -h >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
-        uses: ./.github/actions/vercel-build-output
-        with:
-          app-name: ${{ env.APP_NAME }}
-
-      - name: 🟡 Deploy em HML (Vercel Preview)
-        id: deploy
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_HML }}
-        run: |
-          DEPLOY_URL=$(vercel deploy --prebuilt \
-            --token="$VERCEL_TOKEN" --yes \
-            --meta version="${{ needs.ci.outputs.version }}" \
-            --meta sha="${{ needs.ci.outputs.sha_short }}" \
-            --meta environment=hml \
-            --meta prev_version="${{ steps.snapshot.outputs.prev_version }}" \
-            2>/dev/null)
-
-          if [[ -z "$DEPLOY_URL" ]]; then
-            echo "❌ Vercel não retornou URL — verifique VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID_HML"
-            vercel deploy --prebuilt --token="$VERCEL_TOKEN" --yes 2>&1 || true
-            exit 1
-          fi
-          echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
-          echo "✅ Deploy HML: ${DEPLOY_URL}"
-
-      - name: 💾 Registrar deployment no GitHub Deployments API
-        uses: ./.github/actions/register-deployment
-        with:
-          environment: hml
-          version: ${{ needs.ci.outputs.version }}
-          url: ${{ steps.deploy.outputs.url }}
-
-      - name: 🏥 Health Check HML
-        id: health
-        run: |
-          URL="${{ steps.deploy.outputs.url }}"
-          STATUS="unhealthy"
-          for i in {1..10}; do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "${URL}" || echo "000")
-            # 200 = OK  |  401 = Vercel Deployment Protection ativa (servidor no ar)
-            if [[ "${HTTP_CODE}" == "200" || "${HTTP_CODE}" == "401" ]]; then
-              STATUS="healthy"
-              [[ "${HTTP_CODE}" == "401" ]] && echo "ℹ️ HTTP 401 — Vercel Auth ativa (normal em preview)"
-              break
-            fi
-            echo "⏳ Tentativa ${i}/10 — HTTP ${HTTP_CODE}"; sleep 15
-          done
-          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
-          [[ "${STATUS}" == "healthy" ]] || exit 1
-
-      - name: 📊 Sumário — Deploy HML
-        if: always()
-        run: |
-          echo "## 🟡 Relatório Deploy — HML"                                         >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Detalhe |"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|---------|"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão   | \`${{ needs.ci.outputs.version }}\` |"                >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔑 SHA      | \`${{ needs.ci.outputs.sha_short }}\` |"              >> "$GITHUB_STEP_SUMMARY"
-          echo "| ⚙️ Config   | ng build --configuration=staging |"                   >> "$GITHUB_STEP_SUMMARY"
-          echo "| 📦 Anterior | \`${{ steps.snapshot.outputs.prev_version }}\` |"    >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔗 URL      | ${{ steps.deploy.outputs.url }} |"                   >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏗️ Build    | $([[ '${{ steps.build.outcome }}' == 'success' ]] && echo '✅ Gerado' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏥 Health   | $([[ '${{ steps.health.outputs.status }}' == 'healthy' ]] && echo '✅ Saudável' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 👤 Por      | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |" >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "> ↩️ Para rollback: versão anterior seria \`${{ steps.snapshot.outputs.prev_version }}\`." >> "$GITHUB_STEP_SUMMARY"
-
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  ✅ VERIFICAÇÃO HML — Gate de qualidade pós-deploy                       ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
   verify-hml:
-    name: ✅ Verificação HML — Aprovar para liberar PRD
-    runs-on: ubuntu-latest
     needs: [deploy-hml]
     if: ${{ needs.deploy-hml.result == 'success' }}
+    uses: ./.github/workflows/_gate.yml
+    with:
+      environment:      hml
+      environment-name: HML - Liberar PRD
+      version:          ${{ needs.deploy-hml.outputs.version }}
+      sha-short:        ${{ needs.deploy-hml.outputs.sha_short }}
+      is-final:         false
+    secrets: inherit
 
-    # Propaga version/sha_short para deploy-prd poder usar [verify-hml] como
-    # único needs, eliminando a aresta direta ci→deploy-prd no graph visual.
-    outputs:
-      version:   ${{ needs.deploy-hml.outputs.version }}
-      sha_short: ${{ needs.deploy-hml.outputs.sha_short }}
-
-    environment:
-      name: HML - Liberar PRD
-
-    steps:
-      - name: 🔍 Gate — aguardando verificação da equipe
-        run: |
-          echo "## ✅ Gate de Verificação — HML"                                       >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "Versão **\`${{ needs.deploy-hml.outputs.version }}\`** está live em HML." >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ação | Resultado |"                                                  >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|-----------|"                                                  >> "$GITHUB_STEP_SUMMARY"
-          echo "| ✅ **APROVAR**  | Libera deploy em PRD automaticamente |"           >> "$GITHUB_STEP_SUMMARY"
-          echo "| ❌ **REJEITAR** | Execute workflow **↩️ Rollback** → \`hml\` |"     >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🎯 HML aprovada — registrando autorização para PRD
-        run: |
-          echo "✅ HML aprovada por @${{ github.actor }} em $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 📣 [FAKE] Notificar Slack — Deploy PRD iniciando
-        run: |
-          VERSION="${{ needs.deploy-hml.outputs.version }}"
-          ACTOR="${{ github.actor }}"
-          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-
-          cat << SLACK
-          {
-            "channel": "#deployments",
-            "text": "🚀 *CECCOFF — Deploy PRD Iniciando*",
-            "attachments": [{
-              "color": "#439FE0",
-              "fields": [
-                { "title": "Versão",         "value": "${VERSION}",   "short": true },
-                { "title": "Autorizado por", "value": "@${ACTOR}",    "short": true },
-                { "title": "Horário",        "value": "${TIMESTAMP}", "short": true }
-              ]
-            }]
-          }
-          SLACK
-
-          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
-          #   -H 'Content-type: application/json' \
-          #   --data "{\"text\":\"🚀 Deploy PRD iniciando — \`${VERSION}\` por @${ACTOR}\"}"
-
-          echo "✅ [FAKE] Notificação PRÉ-PRD enviada ao Slack"
-
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🔴 DEPLOY PRD                                                            ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
+  # ── 🔴 PRD ────────────────────────────────────────────────────────────────
   deploy-prd:
-    name: 🔴 Deploy → PRD
-    runs-on: ubuntu-latest
     needs: [verify-hml]
     if: ${{ needs.verify-hml.result == 'success' }}
-    permissions:
-      deployments: write
-      contents: read
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment:      prd
+      environment-name: PRD - Deploy
+      version:          ${{ needs.verify-hml.outputs.version }}
+      sha-short:        ${{ needs.verify-hml.outputs.sha_short }}
+      app-name:         ceccoff-frontend
+      node-version:     '20.x'
+    secrets: inherit
 
-    outputs:
-      version:      ${{ needs.verify-hml.outputs.version }}
-      sha_short:    ${{ needs.verify-hml.outputs.sha_short }}
-      url:          ${{ steps.deploy.outputs.url }}
-      prev_version: ${{ steps.snapshot.outputs.prev_version }}
-      prev_url:     ${{ steps.snapshot.outputs.prev_url }}
-
-    environment:
-      name: PRD - Deploy
-      url: ${{ steps.deploy.outputs.url }}
-
-    steps:
-      - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
-
-      - name: 🛠️ Setup Node + npm ci + Vercel CLI
-        uses: ./.github/actions/setup-deps
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      # ── Captura versão atual de PRD antes de sobrescrever (para rollback) ──
-      - name: 💾 Snapshot versão anterior de PRD
-        id: snapshot
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const deployments = await github.rest.repos.listDeployments({
-              owner: context.repo.owner, repo: context.repo.repo,
-              environment: 'prd', per_page: 5
-            }).catch(() => ({ data: [] }));
-
-            let prevVersion = 'none', prevUrl = '';
-            for (const dep of deployments.data) {
-              const statuses = await github.rest.repos.listDeploymentStatuses({
-                owner: context.repo.owner, repo: context.repo.repo,
-                deployment_id: dep.id, per_page: 1
-              }).catch(() => ({ data: [] }));
-              const latest = statuses.data[0];
-              if (latest?.state === 'success') {
-                prevVersion = dep.description?.replace('Version: ', '') || dep.ref;
-                prevUrl = latest.environment_url || '';
-                break;
-              }
-            }
-            core.setOutput('prev_version', prevVersion);
-            core.setOutput('prev_url', prevUrl);
-            console.log(`Versão anterior em PRD: ${prevVersion}`);
-
-      - name: 🔧 Gerar environment.production.ts com secrets — PRD
-        run: |
-          cat > src/environments/environment.production.ts << 'EOF'
-          export const environment = {
-            name:       'production',
-            production: true,
-            apiUrl:     '${{ secrets.PRD_API_URL }}',
-            version:    '${{ needs.verify-hml.outputs.version }}',
-          };
-          EOF
-
-      - name: 🏗️ Build Angular — PRD (ng build --configuration=production)
-        id: build
-        run: |
-          npm run build:prod
-          echo "**📊 Bundles PRD:**" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          du -sh dist/**/* 2>/dev/null | sort -h >> "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
-        uses: ./.github/actions/vercel-build-output
-        with:
-          app-name: ${{ env.APP_NAME }}
-
-      - name: 🔴 Deploy em PRD (Vercel Production)
-        id: deploy
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_PRD }}
-        run: |
-          DEPLOY_URL=$(vercel deploy --prebuilt --prod \
-            --token="$VERCEL_TOKEN" --yes \
-            --meta version="${{ needs.verify-hml.outputs.version }}" \
-            --meta sha="${{ needs.verify-hml.outputs.sha_short }}" \
-            --meta environment=prd \
-            --meta prev_version="${{ steps.snapshot.outputs.prev_version }}" \
-            2>/dev/null)
-
-          if [[ -z "$DEPLOY_URL" ]]; then
-            echo "❌ Vercel não retornou URL — verifique VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID_PRD"
-            vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" --yes 2>&1 || true
-            exit 1
-          fi
-          echo "url=${DEPLOY_URL}" >> "$GITHUB_OUTPUT"
-          echo "✅ Deploy PRD: ${DEPLOY_URL}"
-
-      - name: 💾 Registrar deployment no GitHub Deployments API
-        uses: ./.github/actions/register-deployment
-        with:
-          environment: prd
-          version: ${{ needs.verify-hml.outputs.version }}
-          url: ${{ steps.deploy.outputs.url }}
-
-      - name: 🏥 Health Check PRD
-        id: health
-        run: |
-          URL="${{ steps.deploy.outputs.url }}"
-          STATUS="unhealthy"
-          for i in {1..10}; do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "${URL}" || echo "000")
-            if [[ "${HTTP_CODE}" == "200" ]]; then STATUS="healthy"; break; fi
-            echo "⏳ Tentativa ${i}/10 — HTTP ${HTTP_CODE}"; sleep 15
-          done
-          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
-          if [[ "${STATUS}" == "unhealthy" ]]; then
-            echo "❌ Health check PRD falhou — considere rollback imediato!"; exit 1
-          fi
-
-      - name: 📊 Sumário — Deploy PRD
-        if: always()
-        run: |
-          echo "## 🔴 Relatório Deploy — PRODUÇÃO"                                    >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Detalhe |"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|---------|"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão   | \`${{ needs.verify-hml.outputs.version }}\` |"           >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔑 SHA      | \`${{ needs.verify-hml.outputs.sha_short }}\` |"        >> "$GITHUB_STEP_SUMMARY"
-          echo "| ⚙️ Config   | ng build --configuration=production |"                >> "$GITHUB_STEP_SUMMARY"
-          echo "| 📦 Anterior | \`${{ steps.snapshot.outputs.prev_version }}\` |"    >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔗 URL      | ${{ steps.deploy.outputs.url }} |"                   >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏗️ Build    | $([[ '${{ steps.build.outcome }}' == 'success' ]] && echo '✅ Gerado' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏥 Health   | $([[ '${{ steps.health.outputs.status }}' == 'healthy' ]] && echo '✅ Saudável' || echo '❌ CRÍTICO') |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 👤 Por      | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |" >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "> ↩️ Para rollback: versão anterior seria \`${{ steps.snapshot.outputs.prev_version }}\`." >> "$GITHUB_STEP_SUMMARY"
-
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🎯 VERIFICAÇÃO PRD — Gate final + notificação de sucesso inline         ║
-  # ║                                                                            ║
-  # ║  Fluxo padrão (happy path): gate APROVADO → Slack sucesso → encerra      ║
-  # ║  Exceção (rollback): gate REJEITADO → job cancelado (steps não rodam)    ║
-  # ║                       → use o workflow ↩️ Rollback separado              ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
   verify-prd:
-    name: 🎯 Verificação PRD — Finalizar ou Rollback
-    runs-on: ubuntu-latest
     needs: [deploy-prd]
     if: ${{ needs.deploy-prd.result == 'success' }}
-    permissions:
-      actions:     write
-      deployments: write  # necessário para reviewPendingDeploymentsForRun
-
-    environment:
-      name: PRD - Finalizar Release
-
-    steps:
-      # ── Gate ─────────────────────────────────────────────────────────────────
-      # APROVADO  → steps abaixo rodam (Slack sucesso + cancel).
-      # REJEITADO → job cancelado (nenhum step roda) → use workflow ↩️ Rollback.
-      - name: 🔍 Gate — aguardando aprovação final
-        run: |
-          echo "## 🎯 Gate de Verificação Final — PRODUÇÃO"                               >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                          >> "$GITHUB_STEP_SUMMARY"
-          echo "⚡ **Versão \`${{ needs.deploy-prd.outputs.version }}\` está LIVE em Produção!**" >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                          >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ação | Resultado |"                                                     >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|-----------|"                                                     >> "$GITHUB_STEP_SUMMARY"
-          echo "| ✅ **APROVAR**  | Notifica Slack sucesso e encerra pipeline |"         >> "$GITHUB_STEP_SUMMARY"
-          echo "| ❌ **REJEITAR** | Pipeline encerra — use workflow ↩️ Rollback se necessário |" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 📣 [FAKE] Notificar Slack — Deploy PRD SUCESSO
-        run: |
-          VERSION="${{ needs.deploy-prd.outputs.version }}"
-          SHA="${{ needs.deploy-prd.outputs.sha_short }}"
-          ACTOR="${{ github.actor }}"
-          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-
-          cat << SLACK
-          {
-            "channel": "#deployments",
-            "text": "✅ *CECCOFF — Deploy PRD Concluído com Sucesso*",
-            "attachments": [{
-              "color": "#36a64f",
-              "fields": [
-                { "title": "Versão",       "value": "${VERSION}",   "short": true },
-                { "title": "SHA",          "value": "${SHA}",       "short": true },
-                { "title": "Aprovado por", "value": "@${ACTOR}",    "short": true },
-                { "title": "Horário",      "value": "${TIMESTAMP}", "short": true }
-              ]
-            }]
-          }
-          SLACK
-
-          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
-          #   -H 'Content-type: application/json' \
-          #   --data "{\"text\":\"✅ Deploy PRD *${VERSION}* concluído por @${ACTOR}\"}"
-
-          echo "✅ [FAKE] Notificação de SUCESSO enviada ao Slack"
-
-      - name: 🎉 Release encerrado com sucesso
-        run: |
-          echo "## 🎉 Release Concluído!"                                              >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ambiente | Status |"                                                 >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|--------|"                                                 >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔵 DEV   | ✅ Deployado e Verificado |"                             >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🟡 HML   | ✅ Deployado e Verificado |"                             >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔴 PRD   | ✅ Deployado e Verificado |"                             >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Detalhe |"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|---------|"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão | \`${{ needs.deploy-prd.outputs.version }}\` |"             >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔑 SHA    | \`${{ needs.deploy-prd.outputs.sha_short }}\` |"           >> "$GITHUB_STEP_SUMMARY"
-          echo "| 👤 Por    | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |" >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "> 📣 Notificação de sucesso enviada ao Slack."                         >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🧹 Rejeitar gates pendentes (ex. verify-dev)
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.PAT_REJECT_TOKEN }}
-          script: |
-            // Busca deployments pendentes de aprovação neste run
-            const { data: pending } = await github.rest.actions.getPendingDeploymentsForRun({
-              owner:  context.repo.owner,
-              repo:   context.repo.repo,
-              run_id: context.runId
-            });
-
-            if (pending.length === 0) {
-              console.log('✅ Nenhum deployment pendente — nada a rejeitar.');
-              return;
-            }
-
-            const envIds   = pending.map(d => d.environment.id);
-            const envNames = pending.map(d => d.environment.name).join(', ');
-
-            try {
-              // Rejeita os gates pendentes sem cancelar o workflow inteiro
-              await github.rest.actions.reviewPendingDeploymentsForRun({
-                owner:           context.repo.owner,
-                repo:            context.repo.repo,
-                run_id:          context.runId,
-                environment_ids: envIds,
-                state:           'rejected',
-                comment:         '🤖 Rejeitado automaticamente — PRD aprovado com sucesso.'
-              });
-              console.log(`⏹️ Gates rejeitados: ${envNames}`);
-            } catch (e) {
-              if (e.status === 422) {
-                // 422 = gate já aprovado/finalizado entre o GET e o POST — sem problema
-                console.log(`ℹ️ Gates já resolvidos (${envNames}) — nada a rejeitar.`);
-              } else {
-                throw e;
-              }
-            }
-
+    uses: ./.github/workflows/_gate.yml
+    with:
+      environment:      prd
+      environment-name: PRD - Finalizar Release
+      version:          ${{ needs.deploy-prd.outputs.version }}
+      sha-short:        ${{ needs.deploy-prd.outputs.sha_short }}
+      is-final:         true   # Rejeita gates pendentes (ex: verify-dev) ao aprovar
+    secrets: inherit
