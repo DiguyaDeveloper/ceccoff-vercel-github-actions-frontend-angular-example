@@ -7,10 +7,11 @@
 # ║                                                                              ║
 # ║  Stages:                                                                     ║
 # ║    1 · setup     → detecta versão/SHA                                       ║
-# ║    2 · test          → matrix Node 18+20 (lint, testes, coverage)          ║
-# ║      · security      → npm audit (paralelo ao test)                        ║
-# ║      · code-analysis → CodeQL SAST (paralelo ao test)                      ║
-# ║      · semgrep       → Semgrep rules TypeScript (paralelo ao test)         ║
+# ║    2 · lint          → ESLint + TypeScript type-check (feedback ~30s)      ║
+# ║      · test          → matrix Node 18+20 (testes unitários + coverage)     ║
+# ║      · security      → npm audit (paralelo)                                ║
+# ║      · code-analysis → CodeQL SAST (paralelo)                              ║
+# ║      · semgrep       → Semgrep rules TypeScript (paralelo)                 ║
 # ║    3 · deploy-dev + deploy-hml (paralelos, gatados por todos do stage 2)   ║
 # ║    4 · verify-dev (continue-on-error) + verify-hml (gate)                  ║
 # ║    5 · deploy-prd                                                            ║
@@ -115,9 +116,50 @@ jobs:
           echo "| Ref   | \`${{ github.ref }}\` |"           >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 2a — Testes (Matrix Node 18 + 20)                                 ║
-  # ║  Roda lint + testes em paralelo em múltiplas versões de Node.            ║
-  # ║  Lint e coverage executam apenas na versão primária (20.x).              ║
+  # ║  STAGE 2a — Lint & Type Check                                            ║
+  # ║  Feedback rápido (~30s). Falha imediata sem aguardar testes mais lentos. ║
+  # ║  Roda: ESLint (ng lint) + verificação TypeScript (tsc --noEmit).        ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  lint:
+    name: 🔍 Lint & Type Check
+    runs-on: ubuntu-latest
+    needs: [setup]
+
+    steps:
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js ${{ env.NODE_PRIMARY }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_PRIMARY }}
+          cache: 'npm'
+
+      - name: 📥 Instalar dependências
+        run: npm ci --prefer-offline
+
+      - name: 🔍 ESLint
+        id: eslint
+        run: npm run lint
+
+      - name: 🏷️ TypeScript — type check (sem emitir arquivos)
+        id: typecheck
+        run: npx tsc --noEmit
+
+      - name: 📊 Sumário — Lint & Type Check
+        if: always()
+        run: |
+          echo "## 🔍 Lint & Type Check"                                                    >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                             >> "$GITHUB_STEP_SUMMARY"
+          echo "| Check | Status |"                                                          >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|"                                                          >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔍 ESLint     | $([[ '${{ steps.eslint.outcome }}'    == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ TypeScript | $([[ '${{ steps.typecheck.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  STAGE 2b — Testes (Matrix Node 18 + 20)                                 ║
+  # ║  Foco exclusivo em testes unitários + cobertura.                         ║
+  # ║  Lint foi extraído para job dedicado (feedback mais rápido).             ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   test:
     name: 🧪 Testes — Node ${{ matrix.node-version }}
@@ -141,11 +183,6 @@ jobs:
 
       - name: 📥 Instalar dependências
         run: npm ci --prefer-offline
-
-      - name: 🔍 Lint & Type Check
-        id: lint
-        if: matrix.node-version == '20.x'
-        run: npm run lint
 
       - name: 🧪 Testes unitários
         id: tests
@@ -188,9 +225,6 @@ jobs:
           echo "| Item | Status |"                                            >> "$GITHUB_STEP_SUMMARY"
           echo "|------|--------|"                                            >> "$GITHUB_STEP_SUMMARY"
           echo "| 🏷️ Versão | \`${{ needs.setup.outputs.version }}\` |"      >> "$GITHUB_STEP_SUMMARY"
-          if [[ "${{ matrix.node-version }}" == "20.x" ]]; then
-            echo "| 🔍 Lint   | $([[ '${{ steps.lint.outcome }}'  == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
-          fi
           echo "| 🧪 Testes | $([[ '${{ steps.tests.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
@@ -365,12 +399,12 @@ jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 3 — Deploy DEV                                                    ║
-  # ║  Só executa após test + security + code-analysis + semgrep passarem.   ║
+  # ║  Só executa após lint + test + security + code-analysis + semgrep.     ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-dev:
     name: 🔵 Deploy → DEV
     runs-on: ubuntu-latest
-    needs: [setup, test, security, code-analysis, semgrep]
+    needs: [setup, lint, test, security, code-analysis, semgrep]
     if: ${{ inputs.skip_dev != true }}
     permissions:
       deployments: write
@@ -457,7 +491,7 @@ jobs:
   deploy-hml:
     name: 🟡 Deploy → HML
     runs-on: ubuntu-latest
-    needs: [setup, test, security, code-analysis, semgrep]
+    needs: [setup, lint, test, security, code-analysis, semgrep]
     if: ${{ inputs.skip_hml != true }}
     permissions:
       deployments: write
