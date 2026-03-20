@@ -8,7 +8,7 @@
 # ║  Stages:                                                                     ║
 # ║    1 · setup      → detecta versão/SHA                                      ║
 # ║    2 · lint       → ESLint + TypeScript type-check (feedback ~30s)         ║
-# ║      · test       → testes unitários + coverage (Node 20)                  ║
+# ║      · test       → matrix Node 18+20 (testes unitários + coverage)        ║
 # ║      · security   → npm audit (paralelo)                                   ║
 # ║    3 · deploy-dev + deploy-hml (paralelos, gatados por todos do stage 2)   ║
 # ║    4 · verify-hml → único gate humano (HML OK → libera PRD)                ║
@@ -165,24 +165,29 @@ jobs:
           echo "| 🏷️ TypeScript | $([[ '${{ steps.typecheck.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 2b — Testes (Node 20 — versão única de produção)                  ║
+  # ║  STAGE 2b — Testes (Matrix Node 18 + 20)                                 ║
   # ║  Foco exclusivo em testes unitários + cobertura.                         ║
-  # ║  Sem matrix: compatibilidade Node verifica-se via sast.yml schedule.     ║
+  # ║  Lint foi extraído para job dedicado (feedback mais rápido).             ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   test:
-    name: 🧪 Testes — Node 20.x
+    name: 🧪 Testes — Node ${{ matrix.node-version }}
     runs-on: ubuntu-latest
     needs: [setup]
     timeout-minutes: 15
+
+    strategy:
+      fail-fast: true   # cancela o par se um falhar
+      matrix:
+        node-version: ['18.x', '20.x']
 
     steps:
       - name: ⬇️ Checkout código
         uses: actions/checkout@v4
 
-      - name: 🟢 Setup Node.js ${{ env.NODE_PRIMARY }}
+      - name: 🟢 Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_PRIMARY }}
+          node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
       - name: 📥 Instalar dependências
@@ -193,7 +198,7 @@ jobs:
         run: npm run test:ci
 
       - name: 📈 Publicar cobertura no sumário
-        if: always()
+        if: matrix.node-version == '20.x' && always()
         run: |
           SUMMARY_FILE="coverage/coverage-summary.json"
           if [[ -f "$SUMMARY_FILE" ]]; then
@@ -201,34 +206,34 @@ jobs:
             BRANCH=$(jq '.total.branches.pct'  "$SUMMARY_FILE")
             FUNCS=$(jq  '.total.functions.pct'  "$SUMMARY_FILE")
             LINES=$(jq  '.total.lines.pct'      "$SUMMARY_FILE")
-            echo "## 📈 Coverage Report"      >> "$GITHUB_STEP_SUMMARY"
-            echo ""                            >> "$GITHUB_STEP_SUMMARY"
-            echo "| Métrica    | Cobertura |"  >> "$GITHUB_STEP_SUMMARY"
-            echo "|------------|-----------|"  >> "$GITHUB_STEP_SUMMARY"
-            echo "| Statements | ${STMTS}% |"  >> "$GITHUB_STEP_SUMMARY"
-            echo "| Branches   | ${BRANCH}% |" >> "$GITHUB_STEP_SUMMARY"
-            echo "| Functions  | ${FUNCS}% |"  >> "$GITHUB_STEP_SUMMARY"
-            echo "| Lines      | ${LINES}% |"  >> "$GITHUB_STEP_SUMMARY"
+            echo "## 📈 Coverage Report (Node ${{ matrix.node-version }})" >> "$GITHUB_STEP_SUMMARY"
+            echo ""                                                          >> "$GITHUB_STEP_SUMMARY"
+            echo "| Métrica    | Cobertura |"                               >> "$GITHUB_STEP_SUMMARY"
+            echo "|------------|-----------|"                               >> "$GITHUB_STEP_SUMMARY"
+            echo "| Statements | ${STMTS}% |"                              >> "$GITHUB_STEP_SUMMARY"
+            echo "| Branches   | ${BRANCH}% |"                             >> "$GITHUB_STEP_SUMMARY"
+            echo "| Functions  | ${FUNCS}% |"                              >> "$GITHUB_STEP_SUMMARY"
+            echo "| Lines      | ${LINES}% |"                              >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "⚠️ coverage-summary.json não encontrado."  >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ coverage-summary.json não encontrado."                >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: 📦 Upload relatório de coverage
-        if: always()
+        if: matrix.node-version == '20.x' && always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report-${{ needs.setup.outputs.sha_short }}
           path: coverage/
           retention-days: 14
 
-      - name: 📊 Sumário — Testes
+      - name: 📊 Sumário — Testes Node ${{ matrix.node-version }}
         if: always()
         run: |
-          echo "## 🧪 Testes — Node ${{ env.NODE_PRIMARY }}"               >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                             >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Status |"                                           >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|--------|"                                           >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão | \`${{ needs.setup.outputs.version }}\` |"     >> "$GITHUB_STEP_SUMMARY"
+          echo "## 🧪 Testes — Node ${{ matrix.node-version }}"              >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                              >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Status |"                                            >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|--------|"                                            >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão | \`${{ needs.setup.outputs.version }}\` |"      >> "$GITHUB_STEP_SUMMARY"
           echo "| 🧪 Testes | $([[ '${{ steps.tests.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
