@@ -54,7 +54,8 @@ env:
   APP_NAME:     'ceccoff-frontend'
 
 permissions:
-  contents: read
+  contents:    read
+  deployments: write  # necessário para reusable-deploy.yml (register-deployment)
 
 defaults:
   run:
