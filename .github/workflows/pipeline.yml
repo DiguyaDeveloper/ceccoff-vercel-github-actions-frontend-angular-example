@@ -10,7 +10,8 @@
 # ║    2 · lint       → ESLint + TypeScript type-check (feedback ~30s)         ║
 # ║      · test       → matrix Node 18+20 (testes unitários + coverage)        ║
 # ║      · security   → npm audit (paralelo)                                   ║
-# ║    3 · deploy-dev + deploy-hml (paralelos, gatados por todos do stage 2)   ║
+# ║      · quality-gate → agrega lint+test+security (bridge p/ reusable call) ║
+# ║    3 · deploy-dev + deploy-hml (paralelos, gatados pelo quality-gate)      ║
 # ║    4 · verify-hml → único gate humano (HML OK → libera PRD)                ║
 # ║    5 · deploy-prd → deploy automático após aprovação                        ║
 # ║    6 · release    → GitHub Release + Slack + cleanup (automático)           ║
@@ -301,12 +302,44 @@ jobs:
           fi
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  STAGE 2d — Quality Gate                                                 ║
+  # ║  Agrega lint + test (matrix) + security em um único job não-matrix.     ║
+  # ║  Necessário porque reusable workflow callers não podem depender          ║
+  # ║  diretamente de matrix jobs (limitação do GitHub Actions).               ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  quality-gate:
+    name: ✅ Quality Gate
+    runs-on: ubuntu-latest
+    needs: [lint, test, security]
+    timeout-minutes: 5
+    if: always()
+
+    steps:
+      - name: ✅ Verificar todos os checks de qualidade
+        run: |
+          LINT="${{ needs.lint.result }}"
+          TEST="${{ needs.test.result }}"
+          SEC="${{ needs.security.result }}"
+
+          echo "| Check    | Status |"                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|--------|"                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔍 Lint     | ${LINT} |"                                    >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🧪 Testes   | ${TEST} |"                                    >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔒 Security | ${SEC} |"                                     >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${LINT}" != "success" || "${TEST}" != "success" || "${SEC}" != "success" ]]; then
+            echo "❌ Quality gate falhou — deploy bloqueado."
+            exit 1
+          fi
+          echo "✅ Todos os checks passaram — liberando deploy."
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 3 — Deploy DEV                                                    ║
   # ║  Reusable workflow encapsula: build → vercel → register → health → sumário║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-dev:
     name: 🔵 Deploy → DEV
-    needs: [setup, lint, test, security]
+    needs: [setup, quality-gate]
     if: ${{ inputs.skip_dev != true }}
     uses: ./.github/workflows/reusable-deploy.yml
     with:
@@ -330,7 +363,7 @@ jobs:
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-hml:
     name: 🟡 Deploy → HML
-    needs: [setup, lint, test, security]
+    needs: [setup, quality-gate]
     if: ${{ inputs.skip_hml != true }}
     uses: ./.github/workflows/reusable-deploy.yml
     with:
