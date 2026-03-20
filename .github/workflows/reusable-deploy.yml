@@ -117,7 +117,7 @@ on:
 # ─── Job ───────────────────────────────────────────────────────────────────────
 jobs:
   deploy:
-    name: ${{ inputs.emoji }} Deploy → ${{ inputs.label }}
+    name: 🏗️ Build & Deploy
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
