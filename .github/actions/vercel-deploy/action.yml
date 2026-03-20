@@ -18,8 +18,9 @@ inputs:
     description: 'Versão semântica'
     required: true
   sha-short:
-    description: 'SHA curto do commit'
-    required: true
+    description: 'SHA curto do commit (opcional — omitir em rollback)'
+    required: false
+    default: ''
   prev-version:
     description: 'Versão anterior (metadado para rastreabilidade)'
     required: false
@@ -28,6 +29,14 @@ inputs:
     description: 'true para deploy em produção (--prod flag)'
     required: false
     default: 'false'
+  rollback:
+    description: 'true para rollback (adiciona metadata rollback=true)'
+    required: false
+    default: 'false'
+  rollback-from:
+    description: 'Versão de origem do rollback (metadata rollback_from)'
+    required: false
+    default: ''
 
 outputs:
   url:
@@ -45,20 +54,22 @@ runs:
         VERCEL_ORG_ID:     ${{ inputs.org-id }}
         VERCEL_PROJECT_ID: ${{ inputs.project-id }}
       run: |
-        FLAGS=""
-        [[ "${{ inputs.prod }}" == "true" ]] && FLAGS="--prod"
+        FLAGS=()
+        [[ "${{ inputs.prod }}" == "true" ]] && FLAGS+=(--prod)
+        [[ -n "${{ inputs.sha-short }}" ]] && FLAGS+=(--meta "sha=${{ inputs.sha-short }}")
+        [[ "${{ inputs.rollback }}" == "true" ]] && \
+          FLAGS+=(--meta "rollback=true" --meta "rollback_from=${{ inputs.rollback-from }}")
 
-        DEPLOY_URL=$(vercel deploy --prebuilt ${FLAGS} \
+        DEPLOY_URL=$(vercel deploy --prebuilt "${FLAGS[@]}" \
           --token="$VERCEL_TOKEN" --yes \
-          --meta version="${{ inputs.version }}" \
-          --meta sha="${{ inputs.sha-short }}" \
-          --meta environment="${{ inputs.environment }}" \
-          --meta prev_version="${{ inputs.prev-version }}" \
+          --meta "version=${{ inputs.version }}" \
+          --meta "environment=${{ inputs.environment }}" \
+          --meta "prev_version=${{ inputs.prev-version }}" \
           2>/dev/null)
 
         if [[ -z "$DEPLOY_URL" ]]; then
           echo "❌ Vercel não retornou URL — verifique token, org-id e project-id para '${{ inputs.environment }}'"
-          vercel deploy --prebuilt ${FLAGS} --token="$VERCEL_TOKEN" --yes 2>&1 || true
+          vercel deploy --prebuilt "${FLAGS[@]}" --token="$VERCEL_TOKEN" --yes 2>&1 || true
           exit 1
         fi
 

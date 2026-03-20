@@ -18,8 +18,9 @@ inputs:
     description: 'Versão semântica'
     required: true
   sha-short:
-    description: 'SHA curto do commit'
-    required: true
+    description: 'SHA curto do commit (opcional — omitir em rollback)'
+    required: false
+    default: ''
   url:
     description: 'URL do deploy Vercel'
     required: false
@@ -55,7 +56,8 @@ runs:
         echo "| Item | Detalhe |"                                                         >> "$GITHUB_STEP_SUMMARY"
         echo "|------|---------|"                                                         >> "$GITHUB_STEP_SUMMARY"
         echo "| 🏷️ Versão   | \`${{ inputs.version }}\` |"                               >> "$GITHUB_STEP_SUMMARY"
-        echo "| 🔑 SHA      | \`${{ inputs.sha-short }}\` |"                             >> "$GITHUB_STEP_SUMMARY"
+        [[ -n "${{ inputs.sha-short }}" ]] && \
+          echo "| 🔑 SHA      | \`${{ inputs.sha-short }}\` |"                           >> "$GITHUB_STEP_SUMMARY"
         echo "| ⚙️ Config   | ng build --configuration=${{ inputs.config }} |"           >> "$GITHUB_STEP_SUMMARY"
         [[ -n "${PREV}" && "${PREV}" != "none" ]] && \
           echo "| 📦 Anterior | \`${PREV}\` |"                                           >> "$GITHUB_STEP_SUMMARY"

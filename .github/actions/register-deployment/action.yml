@@ -23,6 +23,10 @@ inputs:
   url:
     description: 'URL pública do deployment'
     required: true
+  description:
+    description: 'Descrição livre (ex: "Rollback from v1.3.0"). Padrão: "Version: <version>"'
+    required: false
+    default: ''
 
 outputs:
   deployment-id:
@@ -37,16 +41,17 @@ runs:
       uses: actions/github-script@v7
       with:
         script: |
-          const env     = '${{ inputs.environment }}';
-          const version = '${{ inputs.version }}';
-          const url     = '${{ inputs.url }}';
+          const env         = '${{ inputs.environment }}';
+          const version     = '${{ inputs.version }}';
+          const url         = '${{ inputs.url }}';
+          const description = '${{ inputs.description }}' || `Version: ${version}`;
 
           const deployment = await github.rest.repos.createDeployment({
             owner:             context.repo.owner,
             repo:              context.repo.repo,
             ref:               version,
             environment:       env,
-            description:       `Version: ${version}`,
+            description:       description,
             auto_merge:        false,
             required_contexts: []
           });
@@ -57,7 +62,7 @@ runs:
             deployment_id:   deployment.data.id,
             state:           'success',
             environment_url: url,
-            description:     `Version: ${version}`
+            description:     description
           });
 
           core.setOutput('deployment_id', String(deployment.data.id));
