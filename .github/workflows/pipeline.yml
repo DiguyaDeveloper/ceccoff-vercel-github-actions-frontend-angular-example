@@ -11,9 +11,13 @@
 # ║      · test       → matrix Node 18+20 (testes unitários + coverage)        ║
 # ║      · security   → npm audit (paralelo)                                   ║
 # ║      · quality-gate → agrega lint+test+security (bridge p/ reusable call) ║
-# ║    3 · deploy-dev + deploy-hml (paralelos, gatados pelo quality-gate)      ║
+# ║    3 · deploy-dev + deploy-hml (paralelos)                                 ║
 # ║    4 · deploy-prd → gate humano via GitHub Environment "PRD - Deploy"      ║
-# ║    5 · release    → GitHub Release + Slack + cleanup (automático)           ║
+# ║    5 · release    → GitHub Release com changelog automático                 ║
+# ║                                                                              ║
+# ║  Como releases são criadas:                                                  ║
+# ║    PR merge → release-automation.yml (semantic-release)                     ║
+# ║    → bumpa package.json + cria tag vX.Y.Z → dispara este pipeline          ║
 # ║                                                                              ║
 # ║  Reusable Workflow:                                                          ║
 # ║    reusable-deploy.yml → encapsula ciclo completo de deploy por ambiente    ║
@@ -27,29 +31,14 @@ name: 🚀 Pipeline CI/CD
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 🎯 TRIGGERS
+# Disparado exclusivamente por push de tag semântica.
+# A tag é criada pelo release-automation.yml após merge de PR na main.
 # ─────────────────────────────────────────────────────────────────────────────
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'    # v1.0.0, v2.3.1, etc.
-      - 'v[0-9]+.[0-9]+.[0-9]+-*'  # v1.0.0-rc.1, v1.0.0-hotfix.1, etc.
-
-  workflow_dispatch:
-    inputs:
-      skip_dev:
-        description: '⏭️ Pular deploy em DEV'
-        type: boolean
-        default: false
-        required: false
-      skip_hml:
-        description: '⏭️ Pular deploy em HML (PRD não será executado)'
-        type: boolean
-        default: false
-        required: false
-      force_version:
-        description: '🏷️ Versão/Tag para forçar deploy (ex: v1.2.3). Padrão: tag atual'
-        type: string
-        required: false
+      - 'v[0-9]+.[0-9]+.[0-9]+'    # v1.0.0, v2.3.1 — release estável
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'  # v1.0.0-rc.1, v1.0.0-hotfix.1 — pre-release
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 🔒 CONCORRÊNCIA — Evita deploys paralelos no mesmo ambiente
@@ -105,13 +94,8 @@ jobs:
       - name: 🏷️ Detectar versão
         id: version
         run: |
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-          elif [[ -n "${{ inputs.force_version }}" ]]; then
-            TAG="${{ inputs.force_version }}"
-          else
-            TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo 'v0.0.0-dev')"
-          fi
+          # Pipeline é exclusivamente disparado por push de tag → GITHUB_REF sempre é refs/tags/*
+          TAG="${GITHUB_REF#refs/tags/}"
           SHA="${GITHUB_SHA::7}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
@@ -340,7 +324,7 @@ jobs:
   deploy-dev:
     name: 🔵 Deploy → DEV
     needs: [setup, quality-gate]
-    if: ${{ inputs.skip_dev != true }}
+    if: ${{ needs.quality-gate.result == 'success' }}
     uses: ./.github/workflows/reusable-deploy.yml
     with:
       environment:        dev
@@ -364,7 +348,7 @@ jobs:
   deploy-hml:
     name: 🟡 Deploy → HML
     needs: [setup, quality-gate]
-    if: ${{ inputs.skip_hml != true }}
+    if: ${{ needs.quality-gate.result == 'success' }}
     uses: ./.github/workflows/reusable-deploy.yml
     with:
       environment:        hml
@@ -424,12 +408,7 @@ jobs:
     name: 🎉 Release
     runs-on: ubuntu-latest
     needs: [setup, deploy-prd]
-    # Só cria Release quando há uma tag real — workflow_dispatch é re-deploy/teste,
-    # não uma nova versão. Evita duplicar/sobrescrever releases existentes.
-    if: >-
-      needs.deploy-prd.result == 'success' &&
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/')
+    if: ${{ needs.deploy-prd.result == 'success' }}
     timeout-minutes: 10
     permissions:
       contents:    write  # criar GitHub Release

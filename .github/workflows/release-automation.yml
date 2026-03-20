@@ -1,0 +1,135 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  🔖 RELEASE AUTOMATION — Semantic Release                                  ║
+# ║                                                                              ║
+# ║  Disparo: merge de PR na branch main                                        ║
+# ║                                                                              ║
+# ║  O que faz:                                                                  ║
+# ║    1. Analisa commits desde a última tag (Conventional Commits)              ║
+# ║    2. Determina próxima versão:                                              ║
+# ║         feat → minor · fix/perf/refactor → patch · BREAKING → major        ║
+# ║    3. Atualiza package.json com a nova versão                               ║
+# ║    4. Commita com "[skip ci]" → não re-dispara este workflow                ║
+# ║    5. Cria e faz push da tag vX.Y.Z                                         ║
+# ║    6. Tag push dispara automaticamente o pipeline.yml (CI/CD completo)      ║
+# ║                                                                              ║
+# ║  Sem releasable commits (apenas chore/docs/ci/test):                        ║
+# ║    → Nenhuma tag criada · Nenhum deploy disparado                           ║
+# ║                                                                              ║
+# ║  Secret necessário:                                                          ║
+# ║    RELEASE_PAT — Personal Access Token com escopo "repo"                    ║
+# ║    Necessário para que o push da tag dispare outros workflows               ║
+# ║    (GITHUB_TOKEN não dispara workflows downstream por segurança)            ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 🔖 Release Automation
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🎯 TRIGGER — Executado em todo push na main (merge de PR)
+# Commits com [skip ci] são ignorados automaticamente pelo GitHub Actions
+# (o commit de bump do semantic-release usa [skip ci])
+# ─────────────────────────────────────────────────────────────────────────────
+on:
+  push:
+    branches: [main]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🔒 PERMISSÕES — contents:write para commitar bump + criar tag
+# ─────────────────────────────────────────────────────────────────────────────
+permissions:
+  contents: write
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🔒 CONCORRÊNCIA — Garante uma execução por vez (sem releases simultâneos)
+# cancel-in-progress: false — releases não devem ser cancelados
+# ─────────────────────────────────────────────────────────────────────────────
+concurrency:
+  group: release-automation
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 📋 JOB
+# ══════════════════════════════════════════════════════════════════════════════
+jobs:
+  release:
+    name: 🔖 Semantic Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    outputs:
+      released: ${{ steps.release.outputs.new_release_published }}
+      version:  ${{ steps.release.outputs.new_release_version }}
+
+    steps:
+      # ────────────────────────────────────────────────────────────────────────
+      # 1. Checkout com histórico completo (semantic-release analisa todos os commits)
+      #    Usa RELEASE_PAT para que o push da tag dispare o pipeline.yml
+      # ────────────────────────────────────────────────────────────────────────
+      - name: ⬇️ Checkout (histórico completo)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: 🟢 Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 2. Instalar dependências do projeto (necessário para builds e plugins)
+      # ────────────────────────────────────────────────────────────────────────
+      - name: 📥 Instalar dependências
+        run: npm ci --prefer-offline
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 3. Semantic Release
+      #    cycjimmy/semantic-release-action@v4 expõe outputs estruturados:
+      #      new_release_published → "true" se nova versão foi criada
+      #      new_release_version  → "1.2.3" (sem o "v")
+      #    extra_plugins: plugins não incluídos no core (git + npm)
+      # ────────────────────────────────────────────────────────────────────────
+      - name: 🔖 Analisar commits e publicar versão
+        id: release
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          extra_plugins: |
+            @semantic-release/git@^10
+            @semantic-release/npm@^12
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PAT }}
+          GIT_AUTHOR_NAME:     github-actions[bot]
+          GIT_AUTHOR_EMAIL:    41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME:  github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 4. Sumário — sempre exibido, independente do resultado
+      # ────────────────────────────────────────────────────────────────────────
+      - name: 📊 Sumário
+        if: always()
+        run: |
+          VERSION="${{ steps.release.outputs.new_release_version }}"
+          PUBLISHED="${{ steps.release.outputs.new_release_published }}"
+
+          echo "## 🔖 Release Automation" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                          >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "${PUBLISHED}" == "true" ]]; then
+            echo "| Item | Detalhe |"                                                                >> "$GITHUB_STEP_SUMMARY"
+            echo "|------|---------|"                                                                >> "$GITHUB_STEP_SUMMARY"
+            echo "| 🏷️ Nova versão  | \`v${VERSION}\` |"                                            >> "$GITHUB_STEP_SUMMARY"
+            echo "| 📦 package.json | Atualizado e commitado com \`[skip ci]\` |"                   >> "$GITHUB_STEP_SUMMARY"
+            echo "| 🏷️ Tag          | \`v${VERSION}\` criada e enviada ao repositório |"            >> "$GITHUB_STEP_SUMMARY"
+            echo "| 🚀 Pipeline     | Disparado automaticamente pela tag \`v${VERSION}\` |"         >> "$GITHUB_STEP_SUMMARY"
+            echo "| 👤 Por          | @${{ github.actor }} (merge de PR) |"                         >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "> ℹ️ **Nenhum commit releasable encontrado.**" >> "$GITHUB_STEP_SUMMARY"
+            echo ">"                                              >> "$GITHUB_STEP_SUMMARY"
+            echo "> Commits \`feat\`, \`fix\`, \`perf\` ou \`refactor\` geram uma nova versão." >> "$GITHUB_STEP_SUMMARY"
+            echo "> Commits \`chore\`, \`docs\`, \`ci\`, \`test\`, \`style\`, \`build\` são ignorados." >> "$GITHUB_STEP_SUMMARY"
+          fi
