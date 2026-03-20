@@ -6,27 +6,21 @@
 # ║              environment.<env>.ts gerado em CI com secrets do GitHub        ║
 # ║                                                                              ║
 # ║  Stages:                                                                     ║
-# ║    1 · setup     → detecta versão/SHA                                       ║
-# ║    2 · lint          → ESLint + TypeScript type-check (feedback ~30s)      ║
-# ║      · test          → matrix Node 18+20 (testes unitários + coverage)     ║
-# ║      · security      → npm audit (paralelo)                                ║
-# ║      · code-analysis → CodeQL SAST (paralelo)                              ║
-# ║      · semgrep       → Semgrep rules TypeScript (paralelo)                 ║
+# ║    1 · setup      → detecta versão/SHA                                      ║
+# ║    2 · lint       → ESLint + TypeScript type-check (feedback ~30s)         ║
+# ║      · test       → testes unitários + coverage (Node 20)                  ║
+# ║      · security   → npm audit (paralelo)                                   ║
 # ║    3 · deploy-dev + deploy-hml (paralelos, gatados por todos do stage 2)   ║
-# ║    4 · approve-prd   → único gate humano (HML OK → libera PRD)             ║
-# ║    5 · deploy-prd    → deploy automático após aprovação                     ║
-# ║    6 · release       → GitHub Release + Slack + cleanup (automático)        ║
+# ║    4 · verify-hml → único gate humano (HML OK → libera PRD)                ║
+# ║    5 · deploy-prd → deploy automático após aprovação                        ║
+# ║    6 · release    → GitHub Release + Slack + cleanup (automático)           ║
 # ║                                                                              ║
-# ║  Composite Actions (.github/actions/):                                      ║
-# ║    setup-deps            → node + npm ci + vercel CLI                      ║
-# ║    generate-env-file     → gera environment.<env>.ts com secrets           ║
-# ║    angular-build         → ng build + publica bundles no sumário           ║
-# ║    vercel-build-output   → prepara .vercel/output/ (SPA prebuilt)          ║
-# ║    vercel-deploy         → vercel deploy --prebuilt, retorna URL           ║
-# ║    register-deployment   → GitHub Deployments API (rastreabilidade)        ║
-# ║    health-check          → retry loop HTTP 200/401, modo strict            ║
-# ║    snapshot-prev-version → última versão bem-sucedida por ambiente         ║
-# ║    deploy-summary        → relatório de deploy no GITHUB_STEP_SUMMARY      ║
+# ║  Reusable Workflow:                                                          ║
+# ║    reusable-deploy.yml → encapsula ciclo completo de deploy por ambiente    ║
+# ║      setup-deps → generate-env → build → vercel-build-output               ║
+# ║      → vercel-deploy → register-deployment → health-check → deploy-summary ║
+# ║                                                                              ║
+# ║  SAST (CodeQL + Semgrep): ver sast.yml — roda em PRs e semanalmente        ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 name: 🚀 Pipeline CI/CD
@@ -73,7 +67,8 @@ env:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 🔒 PERMISSÕES MÍNIMAS (princípio do menor privilégio)
-# Jobs que precisam de mais definem explicitamente (deploy: write, contents: write)
+# Jobs que precisam de mais definem explicitamente (release: contents write)
+# Deploy jobs herdam permissões do reusable-deploy.yml (deployments: write)
 # ─────────────────────────────────────────────────────────────────────────────
 permissions:
   contents: read
@@ -170,29 +165,24 @@ jobs:
           echo "| 🏷️ TypeScript | $([[ '${{ steps.typecheck.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 2b — Testes (Matrix Node 18 + 20)                                 ║
+  # ║  STAGE 2b — Testes (Node 20 — versão única de produção)                  ║
   # ║  Foco exclusivo em testes unitários + cobertura.                         ║
-  # ║  Lint foi extraído para job dedicado (feedback mais rápido).             ║
+  # ║  Sem matrix: compatibilidade Node verifica-se via sast.yml schedule.     ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   test:
-    name: 🧪 Testes — Node ${{ matrix.node-version }}
+    name: 🧪 Testes — Node 20.x
     runs-on: ubuntu-latest
     needs: [setup]
     timeout-minutes: 15
-
-    strategy:
-      fail-fast: true   # cancela o par se um falhar
-      matrix:
-        node-version: ['18.x', '20.x']
 
     steps:
       - name: ⬇️ Checkout código
         uses: actions/checkout@v4
 
-      - name: 🟢 Setup Node.js ${{ matrix.node-version }}
+      - name: 🟢 Setup Node.js ${{ env.NODE_PRIMARY }}
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: ${{ env.NODE_PRIMARY }}
           cache: 'npm'
 
       - name: 📥 Instalar dependências
@@ -203,7 +193,7 @@ jobs:
         run: npm run test:ci
 
       - name: 📈 Publicar cobertura no sumário
-        if: matrix.node-version == '20.x' && always()
+        if: always()
         run: |
           SUMMARY_FILE="coverage/coverage-summary.json"
           if [[ -f "$SUMMARY_FILE" ]]; then
@@ -211,146 +201,38 @@ jobs:
             BRANCH=$(jq '.total.branches.pct'  "$SUMMARY_FILE")
             FUNCS=$(jq  '.total.functions.pct'  "$SUMMARY_FILE")
             LINES=$(jq  '.total.lines.pct'      "$SUMMARY_FILE")
-            echo "## 📈 Coverage Report (Node ${{ matrix.node-version }})" >> "$GITHUB_STEP_SUMMARY"
-            echo ""                                                          >> "$GITHUB_STEP_SUMMARY"
-            echo "| Métrica    | Cobertura |"                               >> "$GITHUB_STEP_SUMMARY"
-            echo "|------------|-----------|"                               >> "$GITHUB_STEP_SUMMARY"
-            echo "| Statements | ${STMTS}% |"                              >> "$GITHUB_STEP_SUMMARY"
-            echo "| Branches   | ${BRANCH}% |"                             >> "$GITHUB_STEP_SUMMARY"
-            echo "| Functions  | ${FUNCS}% |"                              >> "$GITHUB_STEP_SUMMARY"
-            echo "| Lines      | ${LINES}% |"                              >> "$GITHUB_STEP_SUMMARY"
+            echo "## 📈 Coverage Report"      >> "$GITHUB_STEP_SUMMARY"
+            echo ""                            >> "$GITHUB_STEP_SUMMARY"
+            echo "| Métrica    | Cobertura |"  >> "$GITHUB_STEP_SUMMARY"
+            echo "|------------|-----------|"  >> "$GITHUB_STEP_SUMMARY"
+            echo "| Statements | ${STMTS}% |"  >> "$GITHUB_STEP_SUMMARY"
+            echo "| Branches   | ${BRANCH}% |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Functions  | ${FUNCS}% |"  >> "$GITHUB_STEP_SUMMARY"
+            echo "| Lines      | ${LINES}% |"  >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "⚠️ coverage-summary.json não encontrado."                >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ coverage-summary.json não encontrado."  >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: 📦 Upload relatório de coverage
-        if: matrix.node-version == '20.x' && always()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report-${{ needs.setup.outputs.sha_short }}
           path: coverage/
           retention-days: 14
 
-      - name: 📊 Sumário — Testes Node ${{ matrix.node-version }}
+      - name: 📊 Sumário — Testes
         if: always()
         run: |
-          echo "## 🧪 Testes — Node ${{ matrix.node-version }}"              >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                              >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Status |"                                            >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|--------|"                                            >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão | \`${{ needs.setup.outputs.version }}\` |"      >> "$GITHUB_STEP_SUMMARY"
+          echo "## 🧪 Testes — Node ${{ env.NODE_PRIMARY }}"               >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                             >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Status |"                                           >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|--------|"                                           >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão | \`${{ needs.setup.outputs.version }}\` |"     >> "$GITHUB_STEP_SUMMARY"
           echo "| 🧪 Testes | $([[ '${{ steps.tests.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 2b — CodeQL Analysis (paralelo ao test)                           ║
-  # ║  SAST nativo do GitHub. 100% open-source, zero infraestrutura.           ║
-  # ║  Resultados aparecem em Security → Code scanning alerts do repositório.  ║
-  # ║  Detecta: injeção, XSS, path traversal, race conditions, etc.            ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
-  code-analysis:
-    name: 🔬 CodeQL Analysis
-    runs-on: ubuntu-latest
-    needs: [setup]
-    timeout-minutes: 30
-    permissions:
-      actions:         read
-      contents:        read
-      security-events: write  # necessário para upload de resultados SARIF
-
-    steps:
-      - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
-
-      - name: 🔬 Inicializar CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: javascript-typescript
-          # security-extended: regras adicionais de segurança além do padrão
-          # security-and-quality: inclui qualidade de código
-          queries: security-extended,security-and-quality
-
-      - name: 🔬 Executar análise CodeQL
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: /language:javascript-typescript
-
-      - name: 📊 Sumário — CodeQL
-        if: always()
-        run: |
-          echo "## 🔬 CodeQL Analysis"                                              >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Detalhe |"                                                 >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|---------|"                                                 >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão    | \`${{ needs.setup.outputs.version }}\` |"          >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔍 Linguagem | TypeScript / JavaScript |"                         >> "$GITHUB_STEP_SUMMARY"
-          echo "| 📋 Queries   | security-extended + security-and-quality |"       >> "$GITHUB_STEP_SUMMARY"
-          echo "| 📍 Resultados | Security → Code scanning alerts |"               >> "$GITHUB_STEP_SUMMARY"
-
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 2c — Semgrep (paralelo ao test e ao CodeQL)                       ║
-  # ║  Rules-based SAST com regras da comunidade para TypeScript/Angular.      ║
-  # ║  Open-source, roda localmente, zero conta necessária.                    ║
-  # ╚════════════════════════════════════════════════════════════════════════════╝
-  semgrep:
-    name: 🔍 Semgrep
-    runs-on: ubuntu-latest
-    needs: [setup]
-    timeout-minutes: 15
-    container:
-      image: semgrep/semgrep
-
-    steps:
-      - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
-
-      - name: 🔍 Semgrep — TypeScript + Security + Angular
-        id: scan
-        run: |
-          semgrep scan \
-            --config "p/typescript" \
-            --config "p/javascript" \
-            --config "p/security-audit" \
-            --config "p/owasp-top-ten" \
-            --error \
-            --json-output=semgrep-results.json \
-            src/ 2>&1 | tee semgrep-output.txt
-          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
-        continue-on-error: true
-
-      - name: 📊 Sumário — Semgrep
-        if: always()
-        run: |
-          FINDINGS=$(jq '.results | length' semgrep-results.json 2>/dev/null || echo "0")
-          ERRORS=$(jq '.errors | length' semgrep-results.json 2>/dev/null || echo "0")
-          STATUS=$([[ "${FINDINGS}" == "0" ]] && echo "✅ Nenhum finding" || echo "⚠️ ${FINDINGS} finding(s) encontrado(s)")
-
-          echo "## 🔍 Semgrep"                                                      >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Detalhe |"                                                 >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|---------|"                                                 >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão   | \`${{ needs.setup.outputs.version }}\` |"           >> "$GITHUB_STEP_SUMMARY"
-          echo "| 📋 Regras   | typescript · javascript · security-audit · owasp |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔍 Findings | ${STATUS} |"                                        >> "$GITHUB_STEP_SUMMARY"
-
-          if [[ -f semgrep-results.json && "${FINDINGS}" != "0" ]]; then
-            echo ""                                                                  >> "$GITHUB_STEP_SUMMARY"
-            echo "<details><summary>📋 Findings detalhados</summary>"              >> "$GITHUB_STEP_SUMMARY"
-            echo ""                                                                  >> "$GITHUB_STEP_SUMMARY"
-            echo '```json'                                                          >> "$GITHUB_STEP_SUMMARY"
-            jq '[.results[] | {file: .path, rule: .check_id, line: .start.line, message: .extra.message}]' \
-              semgrep-results.json 2>/dev/null | head -100                          >> "$GITHUB_STEP_SUMMARY"
-            echo '```'                                                              >> "$GITHUB_STEP_SUMMARY"
-            echo "</details>"                                                       >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: ❌ Falhar se findings críticos encontrados
-        if: steps.scan.outputs.exit_code != '0'
-        run: |
-          echo "❌ Semgrep encontrou issues — revise os findings acima."
-          exit 1
-
-  # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 2d — Security Scan (paralelo a todos acima)                       ║
+  # ║  STAGE 2c — Security Scan (paralelo a lint e test)                       ║
   # ║  Auditoria de dependências. Falha em vulnerabilidades HIGH ou CRITICAL.  ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   security:
@@ -377,7 +259,6 @@ jobs:
         run: |
           # --omit=dev: exclui devDependencies (ferramentas de build, etc.)
           # --audit-level=high: falha em HIGH e CRITICAL
-          # Ajuste para 'critical' se quiser ser menos restritivo inicialmente
           npm audit --audit-level=high --omit=dev 2>&1 | tee audit-output.txt
           EXIT_CODE=${PIPESTATUS[0]}
 
@@ -416,195 +297,54 @@ jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 3 — Deploy DEV                                                    ║
-  # ║  Só executa após lint + test + security + code-analysis + semgrep.     ║
+  # ║  Reusable workflow encapsula: build → vercel → register → health → sumário║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-dev:
     name: 🔵 Deploy → DEV
-    runs-on: ubuntu-latest
-    needs: [setup, lint, test, security, code-analysis, semgrep]
+    needs: [setup, lint, test, security]
     if: ${{ inputs.skip_dev != true }}
-    timeout-minutes: 20
-    permissions:
-      deployments: write
-      contents:    read
-
-    outputs:
-      version: ${{ needs.setup.outputs.version }}
-      url:     ${{ steps.deploy.outputs.url }}
-
-    environment:
-      name: DEV - Deploy
-      url: ${{ steps.deploy.outputs.url }}
-
-    steps:
-      - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
-
-      - name: 🛠️ Setup Node + npm ci + Vercel CLI
-        uses: ./.github/actions/setup-deps
-        with:
-          node-version: ${{ env.NODE_PRIMARY }}
-
-      - name: 🔧 Gerar environment.ts — DEV
-        uses: ./.github/actions/generate-env-file
-        with:
-          environment: dev
-          api-url:     ${{ secrets.DEV_API_URL }}
-          version:     ${{ needs.setup.outputs.version }}
-
-      - name: 🏗️ Build Angular — DEV
-        id: build
-        uses: ./.github/actions/angular-build
-        with:
-          script: build:dev
-          label:  DEV
-
-      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
-        uses: ./.github/actions/vercel-build-output
-        with:
-          app-name: ${{ env.APP_NAME }}
-
-      - name: 🔵 Vercel Deploy — DEV
-        id: deploy
-        uses: ./.github/actions/vercel-deploy
-        with:
-          token:       ${{ secrets.VERCEL_TOKEN }}
-          org-id:      ${{ secrets.VERCEL_ORG_ID }}
-          project-id:  ${{ secrets.VERCEL_PROJECT_ID_DEV }}
-          environment: dev
-          version:     ${{ needs.setup.outputs.version }}
-          sha-short:   ${{ needs.setup.outputs.sha_short }}
-
-      - name: 💾 Registrar deployment no GitHub Deployments API
-        uses: ./.github/actions/register-deployment
-        with:
-          environment: dev
-          version:     ${{ needs.setup.outputs.version }}
-          url:         ${{ steps.deploy.outputs.url }}
-
-      - name: 🏥 Health Check — DEV
-        id: health
-        uses: ./.github/actions/health-check
-        with:
-          url: ${{ steps.deploy.outputs.url }}
-
-      - name: 📊 Sumário — Deploy DEV
-        if: always()
-        uses: ./.github/actions/deploy-summary
-        with:
-          environment:   dev
-          label:         DEV
-          emoji:         🔵
-          config:        development
-          version:       ${{ needs.setup.outputs.version }}
-          sha-short:     ${{ needs.setup.outputs.sha_short }}
-          url:           ${{ steps.deploy.outputs.url }}
-          build-outcome: ${{ steps.build.outcome }}
-          health-status: ${{ steps.health.outputs.status }}
-          actor:         ${{ github.actor }}
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment:        dev
+      github-environment: 'DEV - Deploy'
+      label:              DEV
+      emoji:              '🔵'
+      config:             development
+      version:            ${{ needs.setup.outputs.version }}
+      sha-short:          ${{ needs.setup.outputs.sha_short }}
+      build-script:       build:dev
+    secrets:
+      VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+      API_URL:           ${{ secrets.DEV_API_URL }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 3 — Deploy HML (paralelo ao DEV)                                  ║
+  # ║  strict-health=true: pipeline falha se HML unhealthy após deploy.        ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-hml:
     name: 🟡 Deploy → HML
-    runs-on: ubuntu-latest
-    needs: [setup, lint, test, security, code-analysis, semgrep]
+    needs: [setup, lint, test, security]
     if: ${{ inputs.skip_hml != true }}
-    timeout-minutes: 25
-    permissions:
-      deployments: write
-      contents:    read
-
-    outputs:
-      version:      ${{ needs.setup.outputs.version }}
-      sha_short:    ${{ needs.setup.outputs.sha_short }}
-      url:          ${{ steps.deploy.outputs.url }}
-      prev_version: ${{ steps.snapshot.outputs.prev_version }}
-
-    environment:
-      name: HML - Deploy
-      url: ${{ steps.deploy.outputs.url }}
-
-    steps:
-      - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
-
-      - name: 🛠️ Setup Node + npm ci + Vercel CLI
-        uses: ./.github/actions/setup-deps
-        with:
-          node-version: ${{ env.NODE_PRIMARY }}
-
-      - name: 💾 Snapshot versão anterior — HML
-        id: snapshot
-        uses: ./.github/actions/snapshot-prev-version
-        with:
-          environment: hml
-
-      - name: 🔧 Gerar environment.ts — HML
-        uses: ./.github/actions/generate-env-file
-        with:
-          environment: hml
-          api-url:     ${{ secrets.HML_API_URL }}
-          version:     ${{ needs.setup.outputs.version }}
-
-      - name: 🏗️ Build Angular — HML
-        id: build
-        uses: ./.github/actions/angular-build
-        with:
-          script: build:staging
-          label:  HML
-
-      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
-        uses: ./.github/actions/vercel-build-output
-        with:
-          app-name: ${{ env.APP_NAME }}
-
-      - name: 🟡 Vercel Deploy — HML
-        id: deploy
-        uses: ./.github/actions/vercel-deploy
-        with:
-          token:        ${{ secrets.VERCEL_TOKEN }}
-          org-id:       ${{ secrets.VERCEL_ORG_ID }}
-          project-id:   ${{ secrets.VERCEL_PROJECT_ID_HML }}
-          environment:  hml
-          version:      ${{ needs.setup.outputs.version }}
-          sha-short:    ${{ needs.setup.outputs.sha_short }}
-          prev-version: ${{ steps.snapshot.outputs.prev_version }}
-
-      - name: 💾 Registrar deployment no GitHub Deployments API
-        uses: ./.github/actions/register-deployment
-        with:
-          environment: hml
-          version:     ${{ needs.setup.outputs.version }}
-          url:         ${{ steps.deploy.outputs.url }}
-
-      - name: 🏥 Health Check — HML
-        id: health
-        uses: ./.github/actions/health-check
-        with:
-          url:     ${{ steps.deploy.outputs.url }}
-          retries: '10'
-          wait:    '15'
-          timeout: '15'
-          strict:  'true'
-
-      - name: 📊 Sumário — Deploy HML
-        if: always()
-        uses: ./.github/actions/deploy-summary
-        with:
-          environment:   hml
-          label:         HML
-          emoji:         🟡
-          config:        staging
-          version:       ${{ needs.setup.outputs.version }}
-          sha-short:     ${{ needs.setup.outputs.sha_short }}
-          url:           ${{ steps.deploy.outputs.url }}
-          prev-version:  ${{ steps.snapshot.outputs.prev_version }}
-          build-outcome: ${{ steps.build.outcome }}
-          health-status: ${{ steps.health.outputs.status }}
-          actor:         ${{ github.actor }}
-
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment:        hml
+      github-environment: 'HML - Deploy'
+      label:              HML
+      emoji:              '🟡'
+      config:             staging
+      version:            ${{ needs.setup.outputs.version }}
+      sha-short:          ${{ needs.setup.outputs.sha_short }}
+      build-script:       build:staging
+      strict-health:      'true'
+      health-retries:     '10'
+      health-wait:        '15'
+    secrets:
+      VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+      API_URL:           ${{ secrets.HML_API_URL }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_HML }}
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 4 — Aprovação → PRD (único gate humano do pipeline)               ║
@@ -613,14 +353,9 @@ jobs:
   verify-hml:
     name: 🚀 Aprovação → PRD
     runs-on: ubuntu-latest
-    needs: [deploy-hml]
+    needs: [setup, deploy-hml]
     if: ${{ needs.deploy-hml.result == 'success' }}
     timeout-minutes: 60  # gate humano — espera até 1 hora
-
-    # Propaga version/sha_short para deploy-prd eliminar aresta visual ci→prd
-    outputs:
-      version:   ${{ needs.deploy-hml.outputs.version }}
-      sha_short: ${{ needs.deploy-hml.outputs.sha_short }}
 
     environment:
       name: HML - Liberar PRD
@@ -628,7 +363,7 @@ jobs:
     steps:
       - name: 🔍 Aguardando aprovação da equipe
         run: |
-          VERSION="${{ needs.deploy-hml.outputs.version }}"
+          VERSION="${{ needs.setup.outputs.version }}"
           URL="${{ needs.deploy-hml.outputs.url }}"
 
           echo "## 🚀 Gate de Aprovação — PRD"                                              >> "$GITHUB_STEP_SUMMARY"
@@ -646,107 +381,31 @@ jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 5 — Deploy PRD                                                    ║
+  # ║  Versão lida do job setup (não do verify-hml) — dependência clara.       ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-prd:
     name: 🔴 Deploy → PRD
-    runs-on: ubuntu-latest
-    needs: [verify-hml]
+    needs: [setup, verify-hml]
     if: ${{ needs.verify-hml.result == 'success' }}
-    timeout-minutes: 25
-    permissions:
-      deployments: write
-      contents:    read
-
-    outputs:
-      version:      ${{ needs.verify-hml.outputs.version }}
-      sha_short:    ${{ needs.verify-hml.outputs.sha_short }}
-      url:          ${{ steps.deploy.outputs.url }}
-      prev_version: ${{ steps.snapshot.outputs.prev_version }}
-      prev_url:     ${{ steps.snapshot.outputs.prev_url }}
-
-    environment:
-      name: PRD - Deploy
-      url: ${{ steps.deploy.outputs.url }}
-
-    steps:
-      - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
-
-      - name: 🛠️ Setup Node + npm ci + Vercel CLI
-        uses: ./.github/actions/setup-deps
-        with:
-          node-version: ${{ env.NODE_PRIMARY }}
-
-      - name: 💾 Snapshot versão anterior — PRD
-        id: snapshot
-        uses: ./.github/actions/snapshot-prev-version
-        with:
-          environment: prd
-
-      - name: 🔧 Gerar environment.ts — PRD
-        uses: ./.github/actions/generate-env-file
-        with:
-          environment: prd
-          api-url:     ${{ secrets.PRD_API_URL }}
-          version:     ${{ needs.verify-hml.outputs.version }}
-
-      - name: 🏗️ Build Angular — PRD
-        id: build
-        uses: ./.github/actions/angular-build
-        with:
-          script: build:prod
-          label:  PRD
-
-      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
-        uses: ./.github/actions/vercel-build-output
-        with:
-          app-name: ${{ env.APP_NAME }}
-
-      - name: 🔴 Vercel Deploy — PRD
-        id: deploy
-        uses: ./.github/actions/vercel-deploy
-        with:
-          token:        ${{ secrets.VERCEL_TOKEN }}
-          org-id:       ${{ secrets.VERCEL_ORG_ID }}
-          project-id:   ${{ secrets.VERCEL_PROJECT_ID_PRD }}
-          environment:  prd
-          version:      ${{ needs.verify-hml.outputs.version }}
-          sha-short:    ${{ needs.verify-hml.outputs.sha_short }}
-          prev-version: ${{ steps.snapshot.outputs.prev_version }}
-          prod:         'true'
-
-      - name: 💾 Registrar deployment no GitHub Deployments API
-        uses: ./.github/actions/register-deployment
-        with:
-          environment: prd
-          version:     ${{ needs.verify-hml.outputs.version }}
-          url:         ${{ steps.deploy.outputs.url }}
-
-      - name: 🏥 Health Check — PRD
-        id: health
-        uses: ./.github/actions/health-check
-        with:
-          url:     ${{ steps.deploy.outputs.url }}
-          retries: '10'
-          wait:    '15'
-          timeout: '15'
-          strict:  'true'
-
-      - name: 📊 Sumário — Deploy PRD
-        if: always()
-        uses: ./.github/actions/deploy-summary
-        with:
-          environment:   prd
-          label:         PRODUÇÃO
-          emoji:         🔴
-          config:        production
-          version:       ${{ needs.verify-hml.outputs.version }}
-          sha-short:     ${{ needs.verify-hml.outputs.sha_short }}
-          url:           ${{ steps.deploy.outputs.url }}
-          prev-version:  ${{ steps.snapshot.outputs.prev_version }}
-          build-outcome: ${{ steps.build.outcome }}
-          health-status: ${{ steps.health.outputs.status }}
-          actor:         ${{ github.actor }}
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment:        prd
+      github-environment: 'PRD - Deploy'
+      label:              PRODUÇÃO
+      emoji:              '🔴'
+      config:             production
+      version:            ${{ needs.setup.outputs.version }}
+      sha-short:          ${{ needs.setup.outputs.sha_short }}
+      build-script:       build:prod
+      prod:               'true'
+      strict-health:      'true'
+      health-retries:     '10'
+      health-wait:        '15'
+    secrets:
+      VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+      API_URL:           ${{ secrets.PRD_API_URL }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_PRD }}
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 6 — Release (automático)                                          ║
@@ -758,7 +417,7 @@ jobs:
   release:
     name: 🎉 Release
     runs-on: ubuntu-latest
-    needs: [deploy-prd]
+    needs: [setup, deploy-prd]
     if: ${{ needs.deploy-prd.result == 'success' }}
     timeout-minutes: 10
     permissions:
@@ -776,7 +435,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${{ needs.deploy-prd.outputs.version }}"
+          VERSION="${{ needs.setup.outputs.version }}"
 
           # --generate-notes: changelog automático a partir dos PRs desde a tag anterior
           # Pre-release (sufixo ex: v1.0.0-rc.1): usa --no-latest para não substituir
@@ -800,8 +459,8 @@ jobs:
 
       - name: 📣 Notificar Slack — PRD Live
         run: |
-          VERSION="${{ needs.deploy-prd.outputs.version }}"
-          SHA="${{ needs.deploy-prd.outputs.sha_short }}"
+          VERSION="${{ needs.setup.outputs.version }}"
+          SHA="${{ needs.setup.outputs.sha_short }}"
           URL="${{ needs.deploy-prd.outputs.url }}"
           ACTOR="${{ github.actor }}"
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
@@ -864,8 +523,8 @@ jobs:
 
       - name: 📊 Sumário — Release
         run: |
-          VERSION="${{ needs.deploy-prd.outputs.version }}"
-          SHA="${{ needs.deploy-prd.outputs.sha_short }}"
+          VERSION="${{ needs.setup.outputs.version }}"
+          SHA="${{ needs.setup.outputs.sha_short }}"
           URL="${{ needs.deploy-prd.outputs.url }}"
           REPO="${{ github.repository }}"
 

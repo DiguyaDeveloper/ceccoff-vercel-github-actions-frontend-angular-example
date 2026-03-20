@@ -1,0 +1,157 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  🔬 SAST — Code Security Analysis                                          ║
+# ║                                                                              ║
+# ║  Análise estática de segurança separada do pipeline de deploy.              ║
+# ║  Executa em PRs (antes do merge) e semanalmente para coverage completo.    ║
+# ║                                                                              ║
+# ║  Por que separado do pipeline.yml?                                          ║
+# ║    · Tags representam código já validado — SAST em tags é redundante       ║
+# ║    · SAST pertence ao loop de feedback do desenvolvedor (PR → merge)        ║
+# ║    · CodeQL (30min) + Semgrep bloqueiam PRDs desnecessariamente em tags     ║
+# ║    · Schedule semanal garante cobertura sem atrasar deploys                 ║
+# ║                                                                              ║
+# ║  Jobs:                                                                       ║
+# ║    codeql   → SAST nativo GitHub, resultados em Security → Code scanning   ║
+# ║    semgrep  → Rules-based SAST (typescript, security-audit, owasp)         ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 🔬 SAST — Code Security Analysis
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'package*.json'
+      - '.github/workflows/sast.yml'
+
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+
+  schedule:
+    - cron: '0 2 * * 1'  # Segunda-feira 02:00 UTC — cobertura semanal completa
+
+  workflow_dispatch:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PRs: cancela runs anteriores ao receber novo push na mesma branch
+# Schedule/push: nunca cancela
+# ─────────────────────────────────────────────────────────────────────────────
+concurrency:
+  group: sast-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents:        read
+  security-events: write  # necessário para upload de resultados SARIF (CodeQL)
+  actions:         read
+
+defaults:
+  run:
+    shell: bash
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 📋 JOBS
+# ══════════════════════════════════════════════════════════════════════════════
+jobs:
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  CodeQL — SAST nativo do GitHub                                           ║
+  # ║  Detecta: injeção, XSS, path traversal, race conditions, etc.            ║
+  # ║  Resultados visíveis em: Security → Code scanning alerts                 ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  codeql:
+    name: 🔬 CodeQL Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
+
+      - name: 🔬 Inicializar CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          # security-extended: regras adicionais de segurança além do padrão
+          # security-and-quality: inclui qualidade de código
+          queries: security-extended,security-and-quality
+
+      - name: 🔬 Executar análise CodeQL
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:javascript-typescript
+
+      - name: 📊 Sumário — CodeQL
+        if: always()
+        run: |
+          echo "## 🔬 CodeQL Analysis"                                              >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                    >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Detalhe |"                                                 >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|---------|"                                                 >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔍 Linguagem  | TypeScript / JavaScript |"                        >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📋 Queries    | security-extended + security-and-quality |"       >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📍 Resultados | Security → Code scanning alerts |"               >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔁 Trigger    | \`${{ github.event_name }}\` |"                   >> "$GITHUB_STEP_SUMMARY"
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  Semgrep — Rules-based SAST                                               ║
+  # ║  Open-source. Regras da comunidade para TypeScript/Angular/OWASP.        ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  semgrep:
+    name: 🔍 Semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: semgrep/semgrep
+
+    steps:
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
+
+      - name: 🔍 Semgrep — TypeScript + Security + Angular
+        id: scan
+        run: |
+          semgrep scan \
+            --config "p/typescript" \
+            --config "p/javascript" \
+            --config "p/security-audit" \
+            --config "p/owasp-top-ten" \
+            --error \
+            --json-output=semgrep-results.json \
+            src/ 2>&1 | tee semgrep-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: 📊 Sumário — Semgrep
+        if: always()
+        run: |
+          FINDINGS=$(jq '.results | length' semgrep-results.json 2>/dev/null || echo "0")
+          STATUS=$([[ "${FINDINGS}" == "0" ]] && echo "✅ Nenhum finding" || echo "⚠️ ${FINDINGS} finding(s) encontrado(s)")
+
+          echo "## 🔍 Semgrep"                                                      >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                    >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Detalhe |"                                                 >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|---------|"                                                 >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📋 Regras   | typescript · javascript · security-audit · owasp |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔍 Findings | ${STATUS} |"                                        >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔁 Trigger  | \`${{ github.event_name }}\` |"                     >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ -f semgrep-results.json && "${FINDINGS}" != "0" ]]; then
+            echo ""                                                                  >> "$GITHUB_STEP_SUMMARY"
+            echo "<details><summary>📋 Findings detalhados</summary>"              >> "$GITHUB_STEP_SUMMARY"
+            echo ""                                                                  >> "$GITHUB_STEP_SUMMARY"
+            echo '```json'                                                          >> "$GITHUB_STEP_SUMMARY"
+            jq '[.results[] | {file: .path, rule: .check_id, line: .start.line, message: .extra.message}]' \
+              semgrep-results.json 2>/dev/null | head -100                          >> "$GITHUB_STEP_SUMMARY"
+            echo '```'                                                              >> "$GITHUB_STEP_SUMMARY"
+            echo "</details>"                                                       >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: ❌ Falhar se findings críticos encontrados
+        if: steps.scan.outputs.exit_code != '0'
+        run: |
+          echo "❌ Semgrep encontrou issues — revise os findings acima."
+          exit 1

@@ -53,6 +53,13 @@ env:
   NODE_PRIMARY: '20.x'
   APP_NAME:     'ceccoff-frontend'
 
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
@@ -61,6 +68,7 @@ jobs:
   setup:
     name: 🏷️ Setup & Versão
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     outputs:
       version:   ${{ steps.version.outputs.tag }}
@@ -103,6 +111,7 @@ jobs:
     name: 🔍 Lint & Type Check
     runs-on: ubuntu-latest
     needs: [setup]
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -117,6 +126,7 @@ jobs:
     name: 🧪 Testes
     runs-on: ubuntu-latest
     needs: [setup]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -130,6 +140,7 @@ jobs:
     name: 🔒 Security Audit
     runs-on: ubuntu-latest
     needs: [setup]
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -143,53 +154,27 @@ jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 3 — Deploy DEV (opcional, pulável em emergência)                  ║
+  # ║  Agora inclui: register-deployment + deploy-summary (via reusable)       ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-dev:
     name: 🔵 Deploy → DEV
-    runs-on: ubuntu-latest
     needs: [setup, lint, test, security]
     if: ${{ inputs.skip_dev != true }}
-    permissions:
-      deployments: write
-      contents:    read
-
-    outputs:
-      url: ${{ steps.deploy.outputs.url }}
-
-    environment:
-      name: DEV - Deploy
-      url: ${{ steps.deploy.outputs.url }}
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-deps
-        with:
-          node-version: ${{ env.NODE_PRIMARY }}
-      - uses: ./.github/actions/generate-env-file
-        with:
-          environment: dev
-          api-url:     ${{ secrets.DEV_API_URL }}
-          version:     ${{ needs.setup.outputs.version }}
-      - uses: ./.github/actions/angular-build
-        id: build
-        with:
-          script: build:dev
-          label:  DEV
-      - uses: ./.github/actions/vercel-build-output
-        with:
-          app-name: ${{ env.APP_NAME }}
-      - uses: ./.github/actions/vercel-deploy
-        id: deploy
-        with:
-          token:      ${{ secrets.VERCEL_TOKEN }}
-          org-id:     ${{ secrets.VERCEL_ORG_ID }}
-          project-id: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
-          environment: dev
-          version:    ${{ needs.setup.outputs.version }}
-          sha-short:  ${{ needs.setup.outputs.sha_short }}
-      - uses: ./.github/actions/health-check
-        with:
-          url: ${{ steps.deploy.outputs.url }}
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment:        dev
+      github-environment: 'DEV - Deploy'
+      label:              DEV
+      emoji:              '🔵'
+      config:             development
+      version:            ${{ needs.setup.outputs.version }}
+      sha-short:          ${{ needs.setup.outputs.sha_short }}
+      build-script:       build:dev
+    secrets:
+      VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+      API_URL:           ${{ secrets.DEV_API_URL }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 4 — Aprovação Emergencial → PRD (único gate humano)               ║
@@ -200,6 +185,7 @@ jobs:
     name: 🚨 Aprovação Emergencial → PRD
     runs-on: ubuntu-latest
     needs: [setup, lint, test, security, deploy-dev]
+    timeout-minutes: 60  # gate humano — espera até 1 hora
     if: >-
       always() &&
       needs.setup.result    == 'success' &&
@@ -207,10 +193,6 @@ jobs:
       needs.test.result     == 'success' &&
       needs.security.result == 'success' &&
       (needs.deploy-dev.result == 'success' || needs.deploy-dev.result == 'skipped')
-
-    outputs:
-      version:   ${{ needs.setup.outputs.version }}
-      sha_short: ${{ needs.setup.outputs.sha_short }}
 
     environment:
       name: HML - Liberar PRD
@@ -237,86 +219,31 @@ jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 5 — Deploy PRD                                                    ║
+  # ║  strict-health=true: pipeline falha se PRD unhealthy após deploy.        ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-prd:
     name: 🔴 Deploy → PRD
-    runs-on: ubuntu-latest
-    needs: [approve-prd]
+    needs: [setup, approve-prd]
     if: ${{ needs.approve-prd.result == 'success' }}
-    permissions:
-      deployments: write
-      contents:    read
-
-    outputs:
-      version:      ${{ needs.approve-prd.outputs.version }}
-      sha_short:    ${{ needs.approve-prd.outputs.sha_short }}
-      url:          ${{ steps.deploy.outputs.url }}
-      prev_version: ${{ steps.snapshot.outputs.prev_version }}
-
-    environment:
-      name: PRD - Deploy
-      url: ${{ steps.deploy.outputs.url }}
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-deps
-        with:
-          node-version: ${{ env.NODE_PRIMARY }}
-      - uses: ./.github/actions/snapshot-prev-version
-        id: snapshot
-        with:
-          environment: prd
-      - uses: ./.github/actions/generate-env-file
-        with:
-          environment: prd
-          api-url:     ${{ secrets.PRD_API_URL }}
-          version:     ${{ needs.approve-prd.outputs.version }}
-      - uses: ./.github/actions/angular-build
-        id: build
-        with:
-          script: build:prod
-          label:  PRD
-      - uses: ./.github/actions/vercel-build-output
-        with:
-          app-name: ${{ env.APP_NAME }}
-      - uses: ./.github/actions/vercel-deploy
-        id: deploy
-        with:
-          token:        ${{ secrets.VERCEL_TOKEN }}
-          org-id:       ${{ secrets.VERCEL_ORG_ID }}
-          project-id:   ${{ secrets.VERCEL_PROJECT_ID_PRD }}
-          environment:  prd
-          version:      ${{ needs.approve-prd.outputs.version }}
-          sha-short:    ${{ needs.approve-prd.outputs.sha_short }}
-          prev-version: ${{ steps.snapshot.outputs.prev_version }}
-          prod:         'true'
-      - uses: ./.github/actions/register-deployment
-        with:
-          environment: prd
-          version:     ${{ needs.approve-prd.outputs.version }}
-          url:         ${{ steps.deploy.outputs.url }}
-      - uses: ./.github/actions/health-check
-        id: health
-        with:
-          url:     ${{ steps.deploy.outputs.url }}
-          retries: '10'
-          wait:    '15'
-          timeout: '15'
-          strict:  'true'
-      - uses: ./.github/actions/deploy-summary
-        if: always()
-        with:
-          environment:   prd
-          label:         'PRODUÇÃO (Hotfix)'
-          emoji:         🔴
-          config:        production
-          version:       ${{ needs.approve-prd.outputs.version }}
-          sha-short:     ${{ needs.approve-prd.outputs.sha_short }}
-          url:           ${{ steps.deploy.outputs.url }}
-          prev-version:  ${{ steps.snapshot.outputs.prev_version }}
-          build-outcome: ${{ steps.build.outcome }}
-          health-status: ${{ steps.health.outputs.status }}
-          actor:         ${{ github.actor }}
+    uses: ./.github/workflows/reusable-deploy.yml
+    with:
+      environment:        prd
+      github-environment: 'PRD - Deploy'
+      label:              'PRODUÇÃO (Hotfix)'
+      emoji:              '🔴'
+      config:             production
+      version:            ${{ needs.setup.outputs.version }}
+      sha-short:          ${{ needs.setup.outputs.sha_short }}
+      build-script:       build:prod
+      prod:               'true'
+      strict-health:      'true'
+      health-retries:     '10'
+      health-wait:        '15'
+    secrets:
+      VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+      API_URL:           ${{ secrets.PRD_API_URL }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_PRD }}
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 6 — Release (automático, marcado como pre-release)                ║
@@ -324,8 +251,9 @@ jobs:
   release:
     name: 🎉 Release Hotfix
     runs-on: ubuntu-latest
-    needs: [deploy-prd]
+    needs: [setup, deploy-prd]
     if: ${{ needs.deploy-prd.result == 'success' }}
+    timeout-minutes: 10
     permissions:
       contents: write
       actions:  write
@@ -339,7 +267,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${{ needs.deploy-prd.outputs.version }}"
+          VERSION="${{ needs.setup.outputs.version }}"
           REASON="${{ inputs.reason }}"
           URL="${{ needs.deploy-prd.outputs.url }}"
 
@@ -352,12 +280,13 @@ jobs:
             --title "🔥 ${VERSION}" \
             --notes "$(printf '%b' "${NOTES}")" \
             --prerelease \
+            --no-latest \
             2>/dev/null \
             || echo "ℹ️ Release ${VERSION} já existe — ignorando."
 
       - name: 📊 Sumário — Hotfix Concluído
         run: |
-          VERSION="${{ needs.deploy-prd.outputs.version }}"
+          VERSION="${{ needs.setup.outputs.version }}"
           URL="${{ needs.deploy-prd.outputs.url }}"
           REPO="${{ github.repository }}"
 

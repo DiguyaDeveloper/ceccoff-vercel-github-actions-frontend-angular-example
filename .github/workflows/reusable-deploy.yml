@@ -1,0 +1,211 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  🔄 REUSABLE — Deploy (workflow_call)                                      ║
+# ║                                                                              ║
+# ║  Encapsula o ciclo completo de deploy em qualquer ambiente:                 ║
+# ║    setup-deps → generate-env → build → vercel-build-output                 ║
+# ║    → vercel-deploy → register-deployment → health-check → deploy-summary  ║
+# ║                                                                              ║
+# ║  Chamadores: pipeline.yml, hotfix.yml                                       ║
+# ║                                                                              ║
+# ║  Por que reusable workflow (e não composite action)?                        ║
+# ║    · Precisa de `environment:` (aprovação humana / URL do deploy)           ║
+# ║    · Precisa de `permissions:` próprias (deployments: write)                ║
+# ║    · Produz um nó isolado no grafo visual do Actions                       ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 🔄 Reusable — Deploy
+
+on:
+  workflow_call:
+
+    # ─── Inputs ────────────────────────────────────────────────────────────────
+    inputs:
+      environment:
+        description: 'Identificador do ambiente: dev | hml | prd'
+        type: string
+        required: true
+
+      github-environment:
+        description: 'GitHub Environment configurado no repositório (ex: DEV - Deploy)'
+        type: string
+        required: true
+
+      label:
+        description: 'Label de exibição: DEV | HML | PRODUÇÃO'
+        type: string
+        required: true
+
+      emoji:
+        description: 'Emoji identificador do ambiente: 🔵 | 🟡 | 🔴'
+        type: string
+        required: true
+
+      config:
+        description: 'Configuração do ng build: development | staging | production'
+        type: string
+        required: true
+
+      version:
+        description: 'Versão semântica (ex: v1.2.3)'
+        type: string
+        required: true
+
+      sha-short:
+        description: 'SHA curto do commit (opcional)'
+        type: string
+        required: false
+        default: ''
+
+      build-script:
+        description: 'Script npm: build:dev | build:staging | build:prod'
+        type: string
+        required: true
+
+      prod:
+        description: 'true para deploy em produção (--prod flag Vercel)'
+        type: string
+        required: false
+        default: 'false'
+
+      strict-health:
+        description: 'true para falhar o job quando health check unhealthy'
+        type: string
+        required: false
+        default: 'false'
+
+      health-retries:
+        description: 'Número máximo de tentativas do health check'
+        type: string
+        required: false
+        default: '6'
+
+      health-wait:
+        description: 'Segundos entre tentativas do health check'
+        type: string
+        required: false
+        default: '10'
+
+      node-version:
+        description: 'Versão do Node.js'
+        type: string
+        required: false
+        default: '20.x'
+
+      app-name:
+        description: 'Nome da aplicação Angular (dist/<app-name>/browser/)'
+        type: string
+        required: false
+        default: 'ceccoff-frontend'
+
+    # ─── Secrets ───────────────────────────────────────────────────────────────
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+      VERCEL_ORG_ID:
+        required: true
+      API_URL:
+        required: true
+      VERCEL_PROJECT_ID:
+        required: true
+
+    # ─── Outputs ───────────────────────────────────────────────────────────────
+    outputs:
+      url:
+        description: 'URL do deployment Vercel'
+        value: ${{ jobs.deploy.outputs.url }}
+
+# ─── Job ───────────────────────────────────────────────────────────────────────
+jobs:
+  deploy:
+    name: ${{ inputs.emoji }} Deploy → ${{ inputs.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      deployments: write
+      contents:    read
+
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+
+    environment:
+      name: ${{ inputs.github-environment }}
+      url:  ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: ⬇️ Checkout código
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Setup Node + npm ci + Vercel CLI
+        uses: ./.github/actions/setup-deps
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: 💾 Snapshot versão anterior — ${{ inputs.environment }}
+        id: snapshot
+        uses: ./.github/actions/snapshot-prev-version
+        with:
+          environment: ${{ inputs.environment }}
+
+      - name: 🔧 Gerar environment.ts — ${{ inputs.label }}
+        uses: ./.github/actions/generate-env-file
+        with:
+          environment: ${{ inputs.environment }}
+          api-url:     ${{ secrets.API_URL }}
+          version:     ${{ inputs.version }}
+
+      - name: 🏗️ Build Angular — ${{ inputs.label }}
+        id: build
+        uses: ./.github/actions/angular-build
+        with:
+          script: ${{ inputs.build-script }}
+          label:  ${{ inputs.label }}
+
+      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
+        uses: ./.github/actions/vercel-build-output
+        with:
+          app-name: ${{ inputs.app-name }}
+
+      - name: 🚀 Vercel Deploy — ${{ inputs.label }}
+        id: deploy
+        uses: ./.github/actions/vercel-deploy
+        with:
+          token:        ${{ secrets.VERCEL_TOKEN }}
+          org-id:       ${{ secrets.VERCEL_ORG_ID }}
+          project-id:   ${{ secrets.VERCEL_PROJECT_ID }}
+          environment:  ${{ inputs.environment }}
+          version:      ${{ inputs.version }}
+          sha-short:    ${{ inputs.sha-short }}
+          prev-version: ${{ steps.snapshot.outputs.prev_version }}
+          prod:         ${{ inputs.prod }}
+
+      - name: 💾 Registrar deployment no GitHub Deployments API
+        uses: ./.github/actions/register-deployment
+        with:
+          environment: ${{ inputs.environment }}
+          version:     ${{ inputs.version }}
+          url:         ${{ steps.deploy.outputs.url }}
+
+      - name: 🏥 Health Check — ${{ inputs.label }}
+        id: health
+        uses: ./.github/actions/health-check
+        with:
+          url:     ${{ steps.deploy.outputs.url }}
+          retries: ${{ inputs.health-retries }}
+          wait:    ${{ inputs.health-wait }}
+          strict:  ${{ inputs.strict-health }}
+
+      - name: 📊 Sumário — Deploy ${{ inputs.label }}
+        if: always()
+        uses: ./.github/actions/deploy-summary
+        with:
+          environment:   ${{ inputs.environment }}
+          label:         ${{ inputs.label }}
+          emoji:         ${{ inputs.emoji }}
+          config:        ${{ inputs.config }}
+          version:       ${{ inputs.version }}
+          sha-short:     ${{ inputs.sha-short }}
+          url:           ${{ steps.deploy.outputs.url }}
+          prev-version:  ${{ steps.snapshot.outputs.prev_version }}
+          build-outcome: ${{ steps.build.outcome }}
+          health-status: ${{ steps.health.outputs.status }}
+          actor:         ${{ github.actor }}
