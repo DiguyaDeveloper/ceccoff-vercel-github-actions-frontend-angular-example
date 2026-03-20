@@ -1,0 +1,37 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# CODEOWNERS — Revisores Automáticos por Área do Código
+#
+# Sintaxe: <padrão> <@usuário ou @org/time>
+# Prioridade: regra mais específica ganha sobre a mais genérica.
+#
+# Efeito: quando um PR toca um arquivo coberto por esta regra,
+# o reviewer listado é adicionado automaticamente.
+#
+# Referência: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Dono padrão (todos os arquivos não cobertos por regra específica) ─────────
+* @ceccoff/frontend-team
+
+# ── CI/CD — mudanças em workflow requerem revisão de DevOps ──────────────────
+.github/                    @ceccoff/devops
+.github/workflows/          @ceccoff/devops
+.github/actions/            @ceccoff/devops
+
+# ── Configuração de build e ambiente ─────────────────────────────────────────
+angular.json                @ceccoff/frontend-team
+tsconfig*.json              @ceccoff/frontend-team
+package.json                @ceccoff/frontend-team
+package-lock.json           @ceccoff/frontend-team
+
+# ── Variáveis de ambiente — revisão obrigatória de DevOps ────────────────────
+src/environments/           @ceccoff/devops @ceccoff/frontend-team
+
+# ── Design System — mudanças estruturais requerem revisão sênior ─────────────
+src/app/@design-system/     @ceccoff/frontend-team
+
+# ── Core (auth, navigation, interceptors) ────────────────────────────────────
+src/app/@core/              @ceccoff/frontend-team
+
+# ── ESLint config — mudanças em regras afetam toda a equipe ──────────────────
+eslint.config.mjs           @ceccoff/frontend-team @ceccoff/devops

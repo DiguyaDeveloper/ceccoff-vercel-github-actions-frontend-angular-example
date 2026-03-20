@@ -1,0 +1,215 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  🔍 PR CHECKS — CECCOFF FRONTEND                                          ║
+# ║                                                                              ║
+# ║  Executa em todo Pull Request aberto para main.                             ║
+# ║  Todos os jobs são required checks para merge (configure em Branch Rules).  ║
+# ║                                                                              ║
+# ║  Jobs:                                                                       ║
+# ║    · pr-title  → Conventional Commits no título do PR                       ║
+# ║    · lint      → ESLint + tsc --noEmit (feedback ~30s)                     ║
+# ║    · test      → Jest Node 20 + coverage (sem matrix — velocidade)          ║
+# ║    · security  → npm audit produção (HIGH+CRITICAL)                         ║
+# ║                                                                              ║
+# ║  Trunk-Based: PRs vivem horas, não dias. Checks rápidos = merge rápido.    ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 🔍 PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cancela o run anterior do mesmo PR quando há novo push.
+# Economiza minutos de Actions e dá feedback mais rápido.
+# ─────────────────────────────────────────────────────────────────────────────
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20.x'
+
+jobs:
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  Título do PR — Conventional Commits                                      ║
+  # ║  Garante que o título do PR seja um commit message válido.               ║
+  # ║  Padrão: <type>(<scope>): <subject>                                      ║
+  # ║  Exemplo: feat(auth): adicionar login com OAuth2                          ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  pr-title:
+    name: 📝 Título — Conventional Commits
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - name: 📝 Validar título do PR
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Types alinhados com git-conventions.md do projeto
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          requireScope: false
+          # Subject deve iniciar com letra minúscula
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            O título do PR deve iniciar com letra minúscula.
+            ✅ Correto:   feat(auth): adicionar login com OAuth2
+            ❌ Incorreto: feat(auth): Adicionar login com OAuth2
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  Lint & Type Check                                                        ║
+  # ║  ESLint com regras Angular 21+ (type-aware) + tsc --noEmit               ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  lint:
+    name: 🔍 Lint & Type Check
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Instalar dependências
+        run: npm ci --prefer-offline
+
+      - name: 🔍 ESLint
+        id: eslint
+        run: npm run lint
+
+      - name: 🏷️ TypeScript type check
+        id: typecheck
+        run: npx tsc --noEmit
+
+      - name: 📊 Sumário
+        if: always()
+        run: |
+          echo "## 🔍 Lint & Type Check — PR #${{ github.event.pull_request.number }}" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                          >> "$GITHUB_STEP_SUMMARY"
+          echo "| Check | Status |"                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|"                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔍 ESLint     | $([[ '${{ steps.eslint.outcome }}'    == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ TypeScript | $([[ '${{ steps.typecheck.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  Testes — Node 20 (sem matrix para feedback rápido em PRs)               ║
+  # ║  Matrix completa (18+20) roda apenas na pipeline de release (tag).       ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  test:
+    name: 🧪 Testes
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Instalar dependências
+        run: npm ci --prefer-offline
+
+      - name: 🧪 Jest
+        id: tests
+        run: npm run test:ci
+
+      - name: 📈 Coverage
+        if: always()
+        run: |
+          SUMMARY="coverage/coverage-summary.json"
+          if [[ -f "$SUMMARY" ]]; then
+            STMTS=$(jq '.total.statements.pct' "$SUMMARY")
+            BRANCH=$(jq '.total.branches.pct'  "$SUMMARY")
+            FUNCS=$(jq  '.total.functions.pct'  "$SUMMARY")
+            LINES=$(jq  '.total.lines.pct'      "$SUMMARY")
+
+            echo "## 📈 Coverage — PR #${{ github.event.pull_request.number }}" >> "$GITHUB_STEP_SUMMARY"
+            echo ""                                                               >> "$GITHUB_STEP_SUMMARY"
+            echo "| Statements | Branches | Functions | Lines |"                 >> "$GITHUB_STEP_SUMMARY"
+            echo "|-----------|----------|-----------|-------|"                 >> "$GITHUB_STEP_SUMMARY"
+            echo "| ${STMTS}% | ${BRANCH}% | ${FUNCS}% | ${LINES}% |"           >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ coverage-summary.json não encontrado."                     >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 📦 Upload coverage (para comparação futura)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          path: coverage/
+          retention-days: 7
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  Security Audit                                                           ║
+  # ║  Verifica dependências de produção. Falha em HIGH+CRITICAL.              ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  security:
+    name: 🔒 Security Audit
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📥 Instalar dependências
+        run: npm ci --prefer-offline
+
+      - name: 🔒 npm audit — dependências de produção
+        id: audit
+        run: |
+          npm audit --audit-level=high --omit=dev 2>&1 | tee audit-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+          exit ${EXIT_CODE}
+
+      - name: 📊 Sumário — Security
+        if: always()
+        run: |
+          STATUS=$([[ '${{ steps.audit.outputs.exit_code }}' == '0' ]] && echo '✅ Nenhuma vulnerabilidade HIGH/CRITICAL' || echo '❌ Vulnerabilidades encontradas')
+          echo "## 🔒 Security Audit — PR #${{ github.event.pull_request.number }}" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                     >> "$GITHUB_STEP_SUMMARY"
+          echo "| Escopo | Nível | Status |"                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|--------|"                                         >> "$GITHUB_STEP_SUMMARY"
+          echo "| Produção (\`--omit=dev\`) | HIGH + CRITICAL | ${STATUS} |"        >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ -f audit-output.txt ]]; then
+            echo ""                                                                   >> "$GITHUB_STEP_SUMMARY"
+            echo "<details><summary>📋 Output</summary>"                            >> "$GITHUB_STEP_SUMMARY"
+            echo ""                                                                   >> "$GITHUB_STEP_SUMMARY"
+            echo '```'                                                               >> "$GITHUB_STEP_SUMMARY"
+            head -30 audit-output.txt                                                >> "$GITHUB_STEP_SUMMARY"
+            echo '```'                                                               >> "$GITHUB_STEP_SUMMARY"
+            echo "</details>"                                                        >> "$GITHUB_STEP_SUMMARY"
+          fi

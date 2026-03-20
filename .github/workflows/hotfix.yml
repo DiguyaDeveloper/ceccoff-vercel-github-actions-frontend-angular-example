@@ -1,0 +1,378 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  🔥 HOTFIX — CECCOFF FRONTEND                                             ║
+# ║                                                                              ║
+# ║  Pipeline expedito para correções críticas em produção.                     ║
+# ║  Fluxo: qualidade → DEV → aprovação emergencial → PRD → release            ║
+# ║                                                                              ║
+# ║  Diferenças do pipeline principal:                                          ║
+# ║    · Sem HML (bypass de staging)                                            ║
+# ║    · Sem matrix de Node (apenas 20.x)                                       ║
+# ║    · Sem CodeQL/Semgrep (lento demais para emergência)                     ║
+# ║    · npm audit --audit-level=critical (não HIGH, para não bloquear)        ║
+# ║    · GitHub Release marcado como pre-release automaticamente               ║
+# ║                                                                              ║
+# ║  Triggers:                                                                   ║
+# ║    · Tag semântica: v*-hotfix.*, v*-critical.*, v*-patch.*                  ║
+# ║    · Manual: workflow_dispatch (versão + motivo obrigatórios)               ║
+# ║                                                                              ║
+# ║  ⚠️  Use apenas para emergências. PRs normais → pipeline.yml               ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 🔥 Hotfix
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+-hotfix.*'
+      - 'v[0-9]+.[0-9]+.[0-9]+-critical.*'
+      - 'v[0-9]+.[0-9]+.[0-9]+-patch.*'
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '🏷️ Tag do hotfix (ex: v1.2.1-hotfix.1)'
+        required: true
+        type: string
+      reason:
+        description: '📝 Motivo do hotfix (obrigatório para auditoria)'
+        required: true
+        type: string
+      skip_dev:
+        description: '⚠️ Pular DEV — apenas para emergências críticas'
+        type: boolean
+        default: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Não cancela hotfixes em andamento — cada run é uma emergência independente
+# ─────────────────────────────────────────────────────────────────────────────
+concurrency:
+  group: hotfix-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_PRIMARY: '20.x'
+  APP_NAME:     'ceccoff-frontend'
+
+jobs:
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  STAGE 1 — Setup                                                          ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  setup:
+    name: 🏷️ Setup & Versão
+    runs-on: ubuntu-latest
+
+    outputs:
+      version:   ${{ steps.version.outputs.tag }}
+      sha_short: ${{ steps.version.outputs.sha }}
+
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🏷️ Detectar versão
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="${{ inputs.version }}"
+          fi
+          SHA="${GITHUB_SHA::7}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+          echo "## 🔥 Hotfix — \`${TAG}\` — SHA: \`${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                               >> "$GITHUB_STEP_SUMMARY"
+          [[ -n "${{ inputs.reason }}" ]] && \
+            echo "> 📝 **Motivo:** ${{ inputs.reason }}"       >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                               >> "$GITHUB_STEP_SUMMARY"
+          echo "| Campo  | Valor |"                            >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|"                            >> "$GITHUB_STEP_SUMMARY"
+          echo "| Tag    | \`${TAG}\` |"                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| SHA    | \`${SHA}\` |"                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| Actor  | @${{ github.actor }} |"             >> "$GITHUB_STEP_SUMMARY"
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  STAGE 2 — Qualidade (paralela, expedita)                                ║
+  # ║  Sem matrix, sem SAST pesado. Apenas o essencial para não bloquear.      ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  lint:
+    name: 🔍 Lint & Type Check
+    runs-on: ubuntu-latest
+    needs: [setup]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_PRIMARY }}
+          cache: 'npm'
+      - run: npm ci --prefer-offline
+      - run: npm run lint
+      - run: npx tsc --noEmit
+
+  test:
+    name: 🧪 Testes
+    runs-on: ubuntu-latest
+    needs: [setup]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_PRIMARY }}
+          cache: 'npm'
+      - run: npm ci --prefer-offline
+      - run: npm run test:ci
+
+  security:
+    name: 🔒 Security Audit
+    runs-on: ubuntu-latest
+    needs: [setup]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_PRIMARY }}
+          cache: 'npm'
+      - run: npm ci --prefer-offline
+      # Hotfix: threshold=critical (não high) para não bloquear emergências
+      # Vulnerabilidades HIGH devem ser corrigidas no próximo release normal
+      - run: npm audit --audit-level=critical --omit=dev
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  STAGE 3 — Deploy DEV (opcional, pulável em emergência)                  ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  deploy-dev:
+    name: 🔵 Deploy → DEV
+    runs-on: ubuntu-latest
+    needs: [setup, lint, test, security]
+    if: ${{ inputs.skip_dev != true }}
+    permissions:
+      deployments: write
+      contents:    read
+
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+
+    environment:
+      name: DEV - Deploy
+      url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-deps
+        with:
+          node-version: ${{ env.NODE_PRIMARY }}
+      - uses: ./.github/actions/generate-env-file
+        with:
+          environment: dev
+          api-url:     ${{ secrets.DEV_API_URL }}
+          version:     ${{ needs.setup.outputs.version }}
+      - uses: ./.github/actions/angular-build
+        id: build
+        with:
+          script: build:dev
+          label:  DEV
+      - uses: ./.github/actions/vercel-build-output
+        with:
+          app-name: ${{ env.APP_NAME }}
+      - uses: ./.github/actions/vercel-deploy
+        id: deploy
+        with:
+          token:      ${{ secrets.VERCEL_TOKEN }}
+          org-id:     ${{ secrets.VERCEL_ORG_ID }}
+          project-id: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
+          environment: dev
+          version:    ${{ needs.setup.outputs.version }}
+          sha-short:  ${{ needs.setup.outputs.sha_short }}
+      - uses: ./.github/actions/health-check
+        with:
+          url: ${{ steps.deploy.outputs.url }}
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  STAGE 4 — Aprovação Emergencial → PRD (único gate humano)               ║
+  # ║  Reutiliza o environment "HML - Liberar PRD" — mesmos revisores.         ║
+  # ║  Roda mesmo se deploy-dev foi pulado (skip_dev=true).                    ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  approve-prd:
+    name: 🚨 Aprovação Emergencial → PRD
+    runs-on: ubuntu-latest
+    needs: [setup, lint, test, security, deploy-dev]
+    if: >-
+      always() &&
+      needs.setup.result    == 'success' &&
+      needs.lint.result     == 'success' &&
+      needs.test.result     == 'success' &&
+      needs.security.result == 'success' &&
+      (needs.deploy-dev.result == 'success' || needs.deploy-dev.result == 'skipped')
+
+    outputs:
+      version:   ${{ needs.setup.outputs.version }}
+      sha_short: ${{ needs.setup.outputs.sha_short }}
+
+    environment:
+      name: HML - Liberar PRD
+
+    steps:
+      - name: 🚨 Aguardando aprovação emergencial
+        run: |
+          VERSION="${{ needs.setup.outputs.version }}"
+
+          echo "## 🚨 Aprovação Emergencial — Hotfix → PRD"                                >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                             >> "$GITHUB_STEP_SUMMARY"
+          echo "Hotfix **\`${VERSION}\`** pronto para produção."                            >> "$GITHUB_STEP_SUMMARY"
+          [[ -n "${{ inputs.reason }}" ]] && \
+            echo "> 📝 **Motivo:** ${{ inputs.reason }}"                                    >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                             >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ação | Resultado |"                                                        >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|-----------|"                                                        >> "$GITHUB_STEP_SUMMARY"
+          echo "| ✅ **APROVAR**  | Dispara deploy em PRD imediatamente |"                  >> "$GITHUB_STEP_SUMMARY"
+          echo "| ❌ **REJEITAR** | Hotfix cancelado — corrija e re-tagueie |"              >> "$GITHUB_STEP_SUMMARY"
+
+      - name: ✅ Hotfix aprovado — liberando PRD
+        run: |
+          echo "🚨 PRD liberado por @${{ github.actor }} em $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  STAGE 5 — Deploy PRD                                                    ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  deploy-prd:
+    name: 🔴 Deploy → PRD
+    runs-on: ubuntu-latest
+    needs: [approve-prd]
+    if: ${{ needs.approve-prd.result == 'success' }}
+    permissions:
+      deployments: write
+      contents:    read
+
+    outputs:
+      version:      ${{ needs.approve-prd.outputs.version }}
+      sha_short:    ${{ needs.approve-prd.outputs.sha_short }}
+      url:          ${{ steps.deploy.outputs.url }}
+      prev_version: ${{ steps.snapshot.outputs.prev_version }}
+
+    environment:
+      name: PRD - Deploy
+      url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-deps
+        with:
+          node-version: ${{ env.NODE_PRIMARY }}
+      - uses: ./.github/actions/snapshot-prev-version
+        id: snapshot
+        with:
+          environment: prd
+      - uses: ./.github/actions/generate-env-file
+        with:
+          environment: prd
+          api-url:     ${{ secrets.PRD_API_URL }}
+          version:     ${{ needs.approve-prd.outputs.version }}
+      - uses: ./.github/actions/angular-build
+        id: build
+        with:
+          script: build:prod
+          label:  PRD
+      - uses: ./.github/actions/vercel-build-output
+        with:
+          app-name: ${{ env.APP_NAME }}
+      - uses: ./.github/actions/vercel-deploy
+        id: deploy
+        with:
+          token:        ${{ secrets.VERCEL_TOKEN }}
+          org-id:       ${{ secrets.VERCEL_ORG_ID }}
+          project-id:   ${{ secrets.VERCEL_PROJECT_ID_PRD }}
+          environment:  prd
+          version:      ${{ needs.approve-prd.outputs.version }}
+          sha-short:    ${{ needs.approve-prd.outputs.sha_short }}
+          prev-version: ${{ steps.snapshot.outputs.prev_version }}
+          prod:         'true'
+      - uses: ./.github/actions/register-deployment
+        with:
+          environment: prd
+          version:     ${{ needs.approve-prd.outputs.version }}
+          url:         ${{ steps.deploy.outputs.url }}
+      - uses: ./.github/actions/health-check
+        id: health
+        with:
+          url:     ${{ steps.deploy.outputs.url }}
+          retries: '10'
+          wait:    '15'
+          timeout: '15'
+          strict:  'true'
+      - uses: ./.github/actions/deploy-summary
+        if: always()
+        with:
+          environment:   prd
+          label:         'PRODUÇÃO (Hotfix)'
+          emoji:         🔴
+          config:        production
+          version:       ${{ needs.approve-prd.outputs.version }}
+          sha-short:     ${{ needs.approve-prd.outputs.sha_short }}
+          url:           ${{ steps.deploy.outputs.url }}
+          prev-version:  ${{ steps.snapshot.outputs.prev_version }}
+          build-outcome: ${{ steps.build.outcome }}
+          health-status: ${{ steps.health.outputs.status }}
+          actor:         ${{ github.actor }}
+
+  # ╔════════════════════════════════════════════════════════════════════════════╗
+  # ║  STAGE 6 — Release (automático, marcado como pre-release)                ║
+  # ╚════════════════════════════════════════════════════════════════════════════╝
+  release:
+    name: 🎉 Release Hotfix
+    runs-on: ubuntu-latest
+    needs: [deploy-prd]
+    if: ${{ needs.deploy-prd.result == 'success' }}
+    permissions:
+      contents: write
+      actions:  write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🏷️ Criar GitHub Release (pre-release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ needs.deploy-prd.outputs.version }}"
+          REASON="${{ inputs.reason }}"
+          URL="${{ needs.deploy-prd.outputs.url }}"
+
+          NOTES="## 🔥 Hotfix — \`${VERSION}\`"
+          [[ -n "${REASON}" ]] && NOTES="${NOTES}\n\n> 📝 **Motivo:** ${REASON}"
+          NOTES="${NOTES}\n\n**URL Produção:** ${URL}"
+
+          # Hotfix é sempre pre-release — não substitui o latest estável
+          gh release create "${VERSION}" \
+            --title "🔥 ${VERSION}" \
+            --notes "$(printf '%b' "${NOTES}")" \
+            --prerelease \
+            2>/dev/null \
+            || echo "ℹ️ Release ${VERSION} já existe — ignorando."
+
+      - name: 📊 Sumário — Hotfix Concluído
+        run: |
+          VERSION="${{ needs.deploy-prd.outputs.version }}"
+          URL="${{ needs.deploy-prd.outputs.url }}"
+          REPO="${{ github.repository }}"
+
+          echo "## 🔥 Hotfix Concluído — \`${VERSION}\`"                                             >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ambiente | Status |"                                                                 >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|--------|"                                                                 >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔵 DEV   | $([[ '${{ inputs.skip_dev }}' == 'true' ]] && echo '⏭️ Pulado' || echo '✅ Deployado') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔴 PRD   | ✅ Live |"                                                                >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                                       >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Detalhe |"                                                                    >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|---------|"                                                                    >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🏷️ Versão  | \`${VERSION}\` (pre-release) |"                                        >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔗 URL     | ${URL} |"                                                               >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📦 Release | [${VERSION}](https://github.com/${REPO}/releases/tag/${VERSION}) |"    >> "$GITHUB_STEP_SUMMARY"
+          echo "| 👤 Por     | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |"             >> "$GITHUB_STEP_SUMMARY"
+          [[ -n "${{ inputs.reason }}" ]] && \
+            echo "| 📝 Motivo  | ${{ inputs.reason }} |"                                               >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,107 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Dependabot — Atualizações Automáticas de Dependências
+#
+# Estratégia:
+#   · npm:            semanal (segunda-feira), agrupa por ecossistema
+#   · github-actions: mensal (primeiro dia do mês)
+#
+# PRs gerados pelo Dependabot são automaticamente labeleados com "dependencies"
+# → aparecem na categoria "📦 Dependencies" do changelog (release.yml)
+#
+# Referência: https://docs.github.com/en/code-security/dependabot
+# ──────────────────────────────────────────────────────────────────────────────
+
+version: 2
+
+updates:
+
+  # ── Dependências NPM ─────────────────────────────────────────────────────────
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Sao_Paulo"
+
+    # Limite de PRs abertos simultaneamente (evita flood no repositório)
+    open-pull-requests-limit: 5
+
+    # Labels aplicadas em todo PR do Dependabot
+    labels:
+      - "dependencies"
+      - "deps"
+
+    # Prefixo do commit message (Conventional Commits)
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps(dev)"
+      include: "scope"
+
+    # ── Agrupamento por ecossistema ───────────────────────────────────────────
+    # Ao invés de 1 PR por pacote, agrupa relacionados em 1 PR único.
+    # Reduz ruído e facilita review.
+    groups:
+
+      # Todos os pacotes @angular/* juntos
+      angular:
+        patterns:
+          - "@angular/*"
+          - "@angular-eslint/*"
+          - "zone.js"
+          - "rxjs"
+
+      # TypeScript e ferramentas de tipagem
+      typescript:
+        patterns:
+          - "typescript"
+          - "typescript-eslint"
+          - "@typescript-eslint/*"
+          - "tslib"
+
+      # Jest e ferramentas de teste
+      testing:
+        patterns:
+          - "jest"
+          - "jest-*"
+          - "@jest/*"
+          - "jest-preset-angular"
+
+      # ESLint e plugins
+      eslint:
+        patterns:
+          - "eslint"
+          - "eslint-*"
+          - "@eslint/*"
+          - "angular-eslint"
+
+    # Ignorar major versions de Angular (upgrade manual — breaking changes)
+    ignore:
+      - dependency-name: "@angular/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "rxjs"
+        update-types: ["version-update:semver-major"]
+
+  # ── GitHub Actions ───────────────────────────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Sao_Paulo"
+
+    open-pull-requests-limit: 3
+
+    labels:
+      - "ci"
+      - "dependencies"
+
+    commit-message:
+      prefix: "ci(deps)"
+
+    # Agrupa todas as actions em 1 PR mensal
+    groups:
+      github-actions:
+        patterns:
+          - "*"

@@ -1,0 +1,77 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# GitHub Release Notes — Categorias do Changelog Automático
+#
+# Usado por: gh release create --generate-notes (job `release` no pipeline.yml)
+# Referência: https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes
+#
+# Fluxo: PR mergeado com label → aparece na categoria correta do changelog
+# Labels devem ser criadas no repositório: Settings → Labels
+# ──────────────────────────────────────────────────────────────────────────────
+
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+      - ignore-for-release
+      - dependencies      # Dependabot PRs ficam em categoria própria abaixo
+
+  categories:
+
+    # ── Novas funcionalidades ──────────────────────────────────────────────────
+    - title: 🚀 Features
+      labels:
+        - feat
+        - feature
+        - enhancement
+
+    # ── Correções de bug ───────────────────────────────────────────────────────
+    - title: 🐛 Bug Fixes
+      labels:
+        - fix
+        - bug
+        - bugfix
+
+    # ── Correções críticas (hotfix) ────────────────────────────────────────────
+    - title: 🔥 Hotfixes
+      labels:
+        - hotfix
+        - critical
+
+    # ── Performance ────────────────────────────────────────────────────────────
+    - title: ⚡ Performance
+      labels:
+        - perf
+        - performance
+
+    # ── Segurança ──────────────────────────────────────────────────────────────
+    - title: 🔒 Security
+      labels:
+        - security
+        - vulnerability
+        - cve
+
+    # ── Refatoração ────────────────────────────────────────────────────────────
+    - title: ♻️ Refactoring
+      labels:
+        - refactor
+        - refactoring
+        - cleanup
+
+    # ── Dependências (Dependabot + atualizações manuais) ──────────────────────
+    - title: 📦 Dependencies
+      labels:
+        - dependencies
+        - deps
+
+    # ── CI/CD & Build ──────────────────────────────────────────────────────────
+    - title: 🔧 CI/CD & Build
+      labels:
+        - ci
+        - build
+        - chore
+
+    # ── Documentação ───────────────────────────────────────────────────────────
+    - title: 📝 Documentation
+      labels:
+        - docs
+        - documentation
