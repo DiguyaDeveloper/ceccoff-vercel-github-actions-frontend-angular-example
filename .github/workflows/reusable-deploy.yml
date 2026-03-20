@@ -133,7 +133,7 @@ jobs:
 
     steps:
       - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 🛠️ Setup Node + npm ci + Vercel CLI
         uses: ./.github/actions/setup-deps

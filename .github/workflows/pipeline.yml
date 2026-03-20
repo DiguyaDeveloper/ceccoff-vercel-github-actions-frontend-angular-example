@@ -98,7 +98,7 @@ jobs:
 
     steps:
       - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -136,10 +136,10 @@ jobs:
 
     steps:
       - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 🟢 Setup Node.js ${{ env.NODE_PRIMARY }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_PRIMARY }}
           cache: 'npm'
@@ -183,10 +183,10 @@ jobs:
 
     steps:
       - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 🟢 Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
@@ -221,7 +221,7 @@ jobs:
 
       - name: 📦 Upload relatório de coverage
         if: matrix.node-version == '20.x' && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report-${{ needs.setup.outputs.sha_short }}
           path: coverage/
@@ -249,10 +249,10 @@ jobs:
 
     steps:
       - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 🟢 Setup Node.js ${{ env.NODE_PRIMARY }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_PRIMARY }}
           cache: 'npm'
@@ -465,7 +465,7 @@ jobs:
 
     steps:
       - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -523,7 +523,7 @@ jobs:
           echo "✅ [FAKE] Slack #deployments: ${VERSION} live em PRD por @${ACTOR} às ${TIMESTAMP}"
 
       - name: 🧹 Rejeitar gates pendentes
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ secrets.PAT_REJECT_TOKEN }}
           script: |
