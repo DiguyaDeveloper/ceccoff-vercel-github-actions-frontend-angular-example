@@ -1,5 +1,5 @@
 name: 'Generate Angular Environment File'
-description: 'Gera src/environments/environment.<env>.ts com a API URL e versão do package.json.'
+description: 'Injeta apiUrl (secret) no environment.<env>.ts. Versão lida do package.json em build-time.'
 
 inputs:
   environment:
@@ -15,36 +15,40 @@ runs:
     - name: 🔧 Gerar environment.ts — ${{ inputs.environment }}
       shell: bash
       run: |
-        BASE_VERSION=$(node -p "require('./package.json').version")
-
         case "${{ inputs.environment }}" in
           dev)
             FILE="src/environments/environment.development.ts"
             NAME="development"
             PROD="false"
-            VERSION="${BASE_VERSION}-dev"
+            VERSION_SUFFIX="-dev"
             ;;
           hml)
             FILE="src/environments/environment.staging.ts"
             NAME="staging"
             PROD="false"
-            VERSION="${BASE_VERSION}-staging"
+            VERSION_SUFFIX="-staging"
             ;;
           prd)
             FILE="src/environments/environment.production.ts"
             NAME="production"
             PROD="true"
-            VERSION="${BASE_VERSION}"
+            VERSION_SUFFIX=""
             ;;
         esac
 
-        cat > "${FILE}" << EOF
+        # Versão lida do package.json em build-time via import TypeScript.
+        # A action apenas injeta o apiUrl (secret) — version não é responsabilidade do CI.
+        cat > "${FILE}" << 'TSEOF'
+        import { version } from '../../package.json';
+        TSEOF
+
+        cat >> "${FILE}" << EOF
         export const environment = {
           name:       '${NAME}',
           production: ${PROD},
           apiUrl:     '${{ inputs.api-url }}',
-          version:    '${VERSION}',
+          version:    \`\${version}${VERSION_SUFFIX}\`,
         };
         EOF
 
-        echo "✅ ${FILE} gerado (env=${NAME}, version=${VERSION})"
+        echo "✅ ${FILE} gerado (env=${NAME}, apiUrl=*** versão via package.json${VERSION_SUFFIX})"

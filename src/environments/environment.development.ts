@@ -1,13 +1,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // environment.development.ts — DEV
 //
-// ⚠️ Este arquivo é GERADO pelo pipeline antes do build.
-//    Em CI, os valores abaixo são substituídos pelos secrets do GitHub.
-//    Localmente, use valores de desenvolvimento.
+// ⚠️ Em CI, o pipeline substitui apenas apiUrl pelo secret DEV_API_URL.
+//    A versão é sempre lida do package.json em tempo de build.
 // ─────────────────────────────────────────────────────────────────────────────
+import { version } from '../../package.json';
+
 export const environment = {
   name:       'development',
   production: false,
-  apiUrl:     'http://localhost:3000',   // Substituído por secrets.DEV_API_URL
-  version:    '0.0.0-dev',              // Em CI: <version do package.json>-dev
+  apiUrl:     'http://localhost:3000',   // Substituído por secrets.DEV_API_URL no CI
+  version:    `${version}-dev`,
 };

@@ -1,12 +1,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// environment.ts — BASE (fallback, nunca usado diretamente em builds finais)
+// environment.ts — BASE (fallback local, nunca usado em builds de CI)
 // O angular.json substitui este arquivo via fileReplacements por ambiente.
-// Em CI/CD, o pipeline gera environment.<env>.ts com os secrets corretos.
 // ─────────────────────────────────────────────────────────────────────────────
+import { version } from '../../package.json';
+
 export const environment = {
   name:         'development',
   production:   false,
   apiUrl:       'http://localhost:3000',
-  version:      '0.0.0-local',
+  version:      `${version}-local`,
   enableMockApi: true,
 };

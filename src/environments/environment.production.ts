@@ -1,13 +1,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // environment.production.ts — PRD (Produção)
 //
-// ⚠️ Este arquivo é GERADO pelo pipeline antes do build.
-//    Em CI, os valores abaixo são substituídos pelos secrets do GitHub.
-//    NÃO commite URLs ou chaves reais neste arquivo.
+// ⚠️ Em CI, o pipeline substitui apenas apiUrl pelo secret PRD_API_URL.
+//    A versão é sempre lida do package.json em tempo de build.
 // ─────────────────────────────────────────────────────────────────────────────
+import { version } from '../../package.json';
+
 export const environment = {
   name:       'production',
   production: true,
-  apiUrl:     'https://api.ceccoff.com',   // Substituído por secrets.PRD_API_URL
-  version:    '0.0.0',                     // Em CI: <version do package.json>
+  apiUrl:     'https://api.ceccoff.com',   // Substituído por secrets.PRD_API_URL no CI
+  version,
 };
