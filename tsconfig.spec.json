@@ -2,9 +2,14 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "outDir": "./out-tsc/spec",
-    // Jest usa @types/jest — remover jasmine para evitar conflito de tipos
-    "types": ["jest", "node"],
-    "esModuleInterop": true
+    "types": ["jest"],
+    "esModuleInterop": true,
+    // Jest roda em Node.js — CommonJS é o formato de módulo do runtime.
+    // isolatedModules: transpile-only (padrão jest-preset-angular): TypeScript não
+    // resolve módulos em tempo de compilação; Jest assume essa responsabilidade.
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "isolatedModules": true
   },
   "include": [
     "src/**/*.spec.ts",
