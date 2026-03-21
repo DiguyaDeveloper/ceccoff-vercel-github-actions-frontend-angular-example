@@ -109,7 +109,7 @@ jobs:
           GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
 
       # ────────────────────────────────────────────────────────────────────────
-      # 4. Sumário — sempre exibido, independente do resultado
+      # 3. Sumário — sempre exibido, independente do resultado
       # ────────────────────────────────────────────────────────────────────────
       - name: 📊 Sumário
         if: always()
