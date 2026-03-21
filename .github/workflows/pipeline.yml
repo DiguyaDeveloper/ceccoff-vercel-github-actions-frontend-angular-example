@@ -37,8 +37,8 @@ name: 🚀 Pipeline CI/CD
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'    # v1.0.0, v2.3.1 — release estável
-      - 'v[0-9]+.[0-9]+.[0-9]+-*'  # v1.0.0-rc.1, v1.0.0-hotfix.1 — pre-release
+      - 'v[0-9]*.[0-9]*.[0-9]*'     # v1.0.0, v2.3.1, v10.20.300 — release estável
+      - 'v[0-9]*.[0-9]*.[0-9]*-*'  # v1.0.0-rc.1, v1.0.0-hotfix.1 — pre-release
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 🔒 CONCORRÊNCIA — Evita deploys paralelos no mesmo ambiente
