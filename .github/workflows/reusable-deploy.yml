@@ -155,7 +155,7 @@ jobs:
 
     steps:
       - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref }}  # vazio = HEAD atual; rollback = tag alvo
 
