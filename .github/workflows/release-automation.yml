@@ -71,27 +71,27 @@ jobs:
       #    Usa RELEASE_PAT para que o push da tag dispare o pipeline.yml
       # ────────────────────────────────────────────────────────────────────────
       - name: ⬇️ Checkout (histórico completo)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PAT }}
 
       - name: 🟢 Setup Node.js 20.x
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20.x'
           cache: 'npm'
 
       # ────────────────────────────────────────────────────────────────────────
       # 2. Semantic Release
-      #    cycjimmy/semantic-release-action@v4 expõe outputs estruturados:
+      #    cycjimmy/semantic-release-action@v6 expõe outputs estruturados:
       #      new_release_published → "true" se nova versão foi criada
       #      new_release_version  → "1.2.3" (sem o "v")
       #    extra_plugins: plugins não incluídos no core (git + npm)
       # ────────────────────────────────────────────────────────────────────────
       - name: 🔖 Analisar commits e publicar versão
         id: release
-        uses: cycjimmy/semantic-release-action@v4
+        uses: cycjimmy/semantic-release-action@v6
         with:
           extra_plugins: |
             @semantic-release/git@^10

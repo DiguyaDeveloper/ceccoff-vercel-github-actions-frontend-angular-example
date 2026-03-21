@@ -71,10 +71,10 @@ jobs:
 
     steps:
       - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 🔬 Inicializar CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
           # security-extended: regras adicionais de segurança além do padrão
@@ -82,7 +82,7 @@ jobs:
           queries: security-extended,security-and-quality
 
       - name: 🔬 Executar análise CodeQL
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: /language:javascript-typescript
 
@@ -113,7 +113,7 @@ jobs:
 
     steps:
       - name: ⬇️ Checkout código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 🔍 Semgrep — TypeScript + Security + Angular
         id: scan
@@ -134,7 +134,7 @@ jobs:
       # Upload SARIF → resultados aparecem em Security → Code scanning alerts
       # (mesmo canal do CodeQL — visão unificada de segurança)
       - name: 📤 Publicar resultados no GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: semgrep-results.sarif
