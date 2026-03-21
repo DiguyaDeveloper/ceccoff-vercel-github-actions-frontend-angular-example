@@ -25,9 +25,17 @@ name: 🔖 Release Automation
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 🎯 TRIGGER — Executado em todo push na main (merge de PR)
-# O job tem if: para ignorar commits chore(release): e evitar loop:
-#   PR merge → este workflow roda → cria commit chore(release) + tag
-#   commit re-push main → este workflow ignora (if: filtra) ✓
+#
+# O job possui filtro if: que ignora commits que NUNCA geram release,
+# alinhado com o releaseRules do .releaserc.json:
+#
+#   Releasable   → feat / fix / perf / refactor  → workflow EXECUTA
+#   Não-release  → docs / style / test / chore
+#                  ci / build                    → workflow IGNORADO
+#
+# Fluxo esperado:
+#   PR merge (feat/fix) → workflow roda → cria chore(release): + tag
+#   chore(release): re-push main → filtrado por "chore" ✓ (anti-loop)
 #   tag push → pipeline.yml dispara ✓
 # ─────────────────────────────────────────────────────────────────────────────
 on:
@@ -62,9 +70,15 @@ jobs:
     name: 🔖 Semantic Release
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Evita loop: o commit de bump chore(release): re-dispararia este workflow.
-    # [skip ci] NÃO é usado pois impediria o pipeline.yml de rodar via tag push.
-    if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
+    # Filtra tipos de commit que NUNCA geram release (definido em .releaserc.json).
+    # Também cobre chore(release): — commit de bump do semantic-release (anti-loop).
+    if: >-
+      !startsWith(github.event.head_commit.message, 'chore') &&
+      !startsWith(github.event.head_commit.message, 'docs') &&
+      !startsWith(github.event.head_commit.message, 'ci') &&
+      !startsWith(github.event.head_commit.message, 'style') &&
+      !startsWith(github.event.head_commit.message, 'test') &&
+      !startsWith(github.event.head_commit.message, 'build')
 
     outputs:
       released: ${{ steps.release.outputs.new_release_published }}
