@@ -4,8 +4,9 @@
 // Em CI/CD, o pipeline gera environment.<env>.ts com os secrets corretos.
 // ─────────────────────────────────────────────────────────────────────────────
 export const environment = {
-  name:       'development',
-  production: false,
-  apiUrl:     'http://localhost:3000',
-  version:    '0.0.0-local',
+  name:         'development',
+  production:   false,
+  apiUrl:       'http://localhost:3000',
+  version:      '0.0.0-local',
+  enableMockApi: true,
 };
