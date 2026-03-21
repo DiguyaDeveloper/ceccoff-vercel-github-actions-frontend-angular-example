@@ -83,13 +83,7 @@ jobs:
           cache: 'npm'
 
       # ────────────────────────────────────────────────────────────────────────
-      # 2. Instalar dependências do projeto (necessário para builds e plugins)
-      # ────────────────────────────────────────────────────────────────────────
-      - name: 📥 Instalar dependências
-        run: npm ci --prefer-offline
-
-      # ────────────────────────────────────────────────────────────────────────
-      # 3. Semantic Release
+      # 2. Semantic Release
       #    cycjimmy/semantic-release-action@v4 expõe outputs estruturados:
       #      new_release_published → "true" se nova versão foi criada
       #      new_release_version  → "1.2.3" (sem o "v")
