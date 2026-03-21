@@ -9,5 +9,5 @@ export const environment = {
   name:       'production',
   production: true,
   apiUrl:     'https://api.ceccoff.com',   // Substituído por secrets.PRD_API_URL
-  version:    '0.0.0',                     // Substituído pela tag Git
+  version:    '0.0.0',                     // Em CI: <version do package.json>
 };

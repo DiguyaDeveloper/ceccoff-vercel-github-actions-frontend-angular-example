@@ -9,5 +9,5 @@ export const environment = {
   name:       'development',
   production: false,
   apiUrl:     'http://localhost:3000',   // Substituído por secrets.DEV_API_URL
-  version:    '0.0.0-dev',              // Substituído pela tag Git
+  version:    '0.0.0-dev',              // Em CI: <version do package.json>-dev
 };

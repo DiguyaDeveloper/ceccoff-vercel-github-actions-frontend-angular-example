@@ -9,5 +9,5 @@ export const environment = {
   name:       'staging',
   production: false,
   apiUrl:     'https://api.staging.ceccoff.com',  // Substituído por secrets.HML_API_URL
-  version:    '0.0.0-staging',                    // Substituído pela tag Git
+  version:    '0.0.0-staging',                    // Em CI: <version do package.json>-staging
 };

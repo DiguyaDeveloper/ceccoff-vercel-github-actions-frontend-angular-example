@@ -1,5 +1,5 @@
 name: 'Generate Angular Environment File'
-description: 'Gera src/environments/environment.<env>.ts com a API URL correta por ambiente.'
+description: 'Gera src/environments/environment.<env>.ts com a API URL e versão do package.json.'
 
 inputs:
   environment:
@@ -8,9 +8,6 @@ inputs:
   api-url:
     description: 'URL da API para o ambiente (secret do chamador)'
     required: true
-  version:
-    description: 'Versão semântica da aplicação'
-    required: true
 
 runs:
   using: composite
@@ -18,21 +15,26 @@ runs:
     - name: 🔧 Gerar environment.ts — ${{ inputs.environment }}
       shell: bash
       run: |
+        BASE_VERSION=$(node -p "require('./package.json').version")
+
         case "${{ inputs.environment }}" in
           dev)
             FILE="src/environments/environment.development.ts"
             NAME="development"
             PROD="false"
+            VERSION="${BASE_VERSION}-dev"
             ;;
           hml)
             FILE="src/environments/environment.staging.ts"
             NAME="staging"
             PROD="false"
+            VERSION="${BASE_VERSION}-staging"
             ;;
           prd)
             FILE="src/environments/environment.production.ts"
             NAME="production"
             PROD="true"
+            VERSION="${BASE_VERSION}"
             ;;
         esac
 
@@ -41,8 +43,8 @@ runs:
           name:       '${NAME}',
           production: ${PROD},
           apiUrl:     '${{ inputs.api-url }}',
-          version:    '${{ inputs.version }}',
+          version:    '${VERSION}',
         };
         EOF
 
-        echo "✅ ${FILE} gerado (env=${NAME}, version=${{ inputs.version }})"
+        echo "✅ ${FILE} gerado (env=${NAME}, version=${VERSION})"

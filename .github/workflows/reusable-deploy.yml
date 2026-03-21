@@ -176,7 +176,6 @@ jobs:
         with:
           environment: ${{ inputs.environment }}
           api-url:     ${{ secrets.API_URL }}
-          version:     ${{ inputs.version }}
 
       - name: 🏗️ Build Angular — ${{ inputs.label }}
         id: build
