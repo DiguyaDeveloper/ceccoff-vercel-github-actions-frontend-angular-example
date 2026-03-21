@@ -29,6 +29,8 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      # package.json excluído intencionalmente: commits chore(release) [skip ci]
+      # só tocam package.json e não devem disparar SAST
 
   schedule:
     - cron: '0 2 * * 1'  # Segunda-feira 02:00 UTC — cobertura semanal completa
@@ -104,8 +106,10 @@ jobs:
     name: 🔍 Semgrep
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Versão pinada para garantir reprodutibilidade e segurança (supply chain)
+    # Atualize via Dependabot ou manualmente: https://hub.docker.com/r/semgrep/semgrep/tags
     container:
-      image: semgrep/semgrep
+      image: semgrep/semgrep:1.84.0
 
     steps:
       - name: ⬇️ Checkout código
@@ -113,45 +117,62 @@ jobs:
 
       - name: 🔍 Semgrep — TypeScript + Security + Angular
         id: scan
+        # continue-on-error: true permite que o SARIF seja sempre gerado e enviado
+        # mesmo quando há findings — o passo seguinte falha explicitamente
+        continue-on-error: true
         run: |
           semgrep scan \
             --config "p/typescript" \
             --config "p/javascript" \
             --config "p/security-audit" \
             --config "p/owasp-top-ten" \
-            --error \
-            --json-output=semgrep-results.json \
-            src/ 2>&1 | tee semgrep-output.txt
-          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
-        continue-on-error: true
+            --sarif \
+            --output semgrep-results.sarif \
+            src/
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # Upload SARIF → resultados aparecem em Security → Code scanning alerts
+      # (mesmo canal do CodeQL — visão unificada de segurança)
+      - name: 📤 Publicar resultados no GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep-results.sarif
+          category:   semgrep
 
       - name: 📊 Sumário — Semgrep
         if: always()
         run: |
-          FINDINGS=$(jq '.results | length' semgrep-results.json 2>/dev/null || echo "0")
-          STATUS=$([[ "${FINDINGS}" == "0" ]] && echo "✅ Nenhum finding" || echo "⚠️ ${FINDINGS} finding(s) encontrado(s)")
+          FINDINGS=$(python3 -c "
+          import json, sys
+          try:
+            data = json.load(open('semgrep-results.sarif'))
+            runs = data.get('runs', [{}])
+            total = sum(len(r.get('results', [])) for r in runs)
+            print(total)
+          except: print('?')
+          " 2>/dev/null || echo "?")
 
-          echo "## 🔍 Semgrep"                                                      >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Detalhe |"                                                 >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|---------|"                                                 >> "$GITHUB_STEP_SUMMARY"
-          echo "| 📋 Regras   | typescript · javascript · security-audit · owasp |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔍 Findings | ${STATUS} |"                                        >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔁 Trigger  | \`${{ github.event_name }}\` |"                     >> "$GITHUB_STEP_SUMMARY"
-
-          if [[ -f semgrep-results.json && "${FINDINGS}" != "0" ]]; then
-            echo ""                                                                  >> "$GITHUB_STEP_SUMMARY"
-            echo "<details><summary>📋 Findings detalhados</summary>"              >> "$GITHUB_STEP_SUMMARY"
-            echo ""                                                                  >> "$GITHUB_STEP_SUMMARY"
-            echo '```json'                                                          >> "$GITHUB_STEP_SUMMARY"
-            jq '[.results[] | {file: .path, rule: .check_id, line: .start.line, message: .extra.message}]' \
-              semgrep-results.json 2>/dev/null | head -100                          >> "$GITHUB_STEP_SUMMARY"
-            echo '```'                                                              >> "$GITHUB_STEP_SUMMARY"
-            echo "</details>"                                                       >> "$GITHUB_STEP_SUMMARY"
+          if [[ "${FINDINGS}" == "0" ]]; then
+            STATUS="✅ Nenhum finding"
+          elif [[ "${FINDINGS}" == "?" ]]; then
+            STATUS="⚠️ Não foi possível contar findings"
+          else
+            STATUS="⚠️ ${FINDINGS} finding(s) — ver Security → Code scanning"
           fi
 
-      - name: ❌ Falhar se findings críticos encontrados
+          echo "## 🔍 Semgrep"                                                                >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                                              >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Detalhe |"                                                           >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|---------|"                                                           >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📋 Regras   | typescript · javascript · security-audit · owasp-top-ten |"  >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔍 Findings | ${STATUS} |"                                                  >> "$GITHUB_STEP_SUMMARY"
+          echo "| 📍 Resultados | [Security → Code scanning](../../security/code-scanning) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 🔁 Trigger  | \`${{ github.event_name }}\` |"                               >> "$GITHUB_STEP_SUMMARY"
+
+      - name: ❌ Falhar se findings encontrados
         if: steps.scan.outputs.exit_code != '0'
         run: |
-          echo "❌ Semgrep encontrou issues — revise os findings acima."
+          echo "❌ Semgrep encontrou issues de segurança."
+          echo "   Acesse Security → Code scanning alerts para detalhes."
           exit 1

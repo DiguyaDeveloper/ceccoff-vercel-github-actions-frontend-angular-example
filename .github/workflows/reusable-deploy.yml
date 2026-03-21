@@ -114,6 +114,10 @@ on:
         description: 'URL do deployment Vercel'
         value: ${{ jobs.deploy.outputs.url }}
 
+defaults:
+  run:
+    shell: bash
+
 # ─── Job ───────────────────────────────────────────────────────────────────────
 jobs:
   deploy:

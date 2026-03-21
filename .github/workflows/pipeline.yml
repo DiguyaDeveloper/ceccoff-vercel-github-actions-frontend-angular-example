@@ -305,6 +305,8 @@ jobs:
           TEST="${{ needs.test.result }}"
           SEC="${{ needs.security.result }}"
 
+          echo "## ✅ Quality Gate"                                            >> "$GITHUB_STEP_SUMMARY"
+          echo ""                                                               >> "$GITHUB_STEP_SUMMARY"
           echo "| Check    | Status |"                                         >> "$GITHUB_STEP_SUMMARY"
           echo "|----------|--------|"                                         >> "$GITHUB_STEP_SUMMARY"
           echo "| 🔍 Lint     | ${LINT} |"                                    >> "$GITHUB_STEP_SUMMARY"
@@ -456,23 +458,9 @@ jobs:
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
           REPO="${{ github.repository }}"
 
-          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
-          #   -H 'Content-type: application/json' \
-          #   --data "{
-          #     \"text\": \"✅ *CECCOFF \`${VERSION}\`* está live em produção\",
-          #     \"attachments\": [{
-          #       \"color\": \"#36a64f\",
-          #       \"fields\": [
-          #         { \"title\": \"Versão\", \"value\": \"${VERSION}\", \"short\": true },
-          #         { \"title\": \"URL\",    \"value\": \"${URL}\",     \"short\": true },
-          #         { \"title\": \"SHA\",    \"value\": \"${SHA}\",     \"short\": true },
-          #         { \"title\": \"Por\",    \"value\": \"@${ACTOR}\",  \"short\": true }
-          #       ],
-          #       \"footer\": \"<https://github.com/${REPO}/releases/tag/${VERSION}|Ver Release Notes>\"
-          #     }]
-          #   }"
-
-          echo "✅ [FAKE] Slack #deployments: ${VERSION} live em PRD por @${ACTOR} às ${TIMESTAMP}"
+          # TODO: Ativar notificação Slack quando SLACK_WEBHOOK_URL estiver configurado
+          # Substituir o echo abaixo pelo curl com slackapi/slack-github-action@v2
+          echo "✅ [PLACEHOLDER] Slack #deployments: ${VERSION} live em PRD por @${ACTOR} às ${TIMESTAMP}"
 
       - name: 🧹 Rejeitar gates pendentes
         uses: actions/github-script@v7

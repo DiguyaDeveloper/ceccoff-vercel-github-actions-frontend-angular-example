@@ -17,6 +17,7 @@
 .github/                    @ceccoff/devops
 .github/workflows/          @ceccoff/devops
 .github/actions/            @ceccoff/devops
+.releaserc.json             @ceccoff/devops  # semantic-release config — afeta versionamento
 
 # ── Configuração de build e ambiente ─────────────────────────────────────────
 angular.json                @ceccoff/frontend-team

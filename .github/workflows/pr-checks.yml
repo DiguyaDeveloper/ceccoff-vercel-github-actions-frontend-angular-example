@@ -30,7 +30,8 @@ concurrency:
 
 permissions:
   contents:      read
-  pull-requests: read   # necessário para amannn/action-semantic-pull-request
+  pull-requests: write  # amannn/action-semantic-pull-request precisa de write para postar status/comentários no PR
+  statuses:      write  # necessário para atualizar check status no commit do PR
 
 env:
   NODE_VERSION: '20.x'

@@ -36,7 +36,9 @@ on:
 # 🔒 PERMISSÕES — contents:write para commitar bump + criar tag
 # ─────────────────────────────────────────────────────────────────────────────
 permissions:
-  contents: write
+  contents:      write  # commitar bump do package.json + push da tag
+  issues:        write  # semantic-release comenta em issues relacionadas ao release
+  pull-requests: write  # semantic-release comenta em PRs incluídos no changelog
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 🔒 CONCORRÊNCIA — Garante uma execução por vez (sem releases simultâneos)
