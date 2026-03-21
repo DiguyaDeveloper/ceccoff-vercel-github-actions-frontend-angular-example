@@ -5,15 +5,11 @@
 # ║  Rebuilda com as variáveis do ambiente correto (NG_* baked in)             ║
 # ║  Suporta: DEV, HML e PRD                                                    ║
 # ║                                                                              ║
-# ║  Composite Actions usadas (.github/actions/):                               ║
-# ║    setup-deps          → node + npm ci + vercel CLI                        ║
-# ║    generate-env-file   → gera environment.<env>.ts com secrets             ║
-# ║    angular-build       → ng build + publica bundles no sumário             ║
-# ║    vercel-build-output → prepara .vercel/output/ (SPA prebuilt)            ║
-# ║    vercel-deploy       → vercel deploy --prebuilt, retorna URL             ║
-# ║    register-deployment → GitHub Deployments API (rastreabilidade)          ║
-# ║    health-check        → retry loop HTTP 200/401, modo strict              ║
-# ║    deploy-summary      → relatório de rollback no GITHUB_STEP_SUMMARY      ║
+# ║  Fluxo:                                                                      ║
+# ║    detect-version → approve-rollback → reusable-deploy (por ambiente)      ║
+# ║                                                                              ║
+# ║  O ciclo de deploy (build → vercel → health-check → summary) é             ║
+# ║  encapsulado em reusable-deploy.yml, o mesmo usado pelo pipeline.yml        ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 name: ↩️ Rollback
@@ -49,11 +45,12 @@ on:
         required: true
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 🔒 PERMISSÕES MÍNIMAS (princípio do menor privilégio)
-# Jobs que precisam de mais definem explicitamente
+# 🔒 PERMISSÕES MÍNIMAS
+# deployments: write — herdado pelo reusable-deploy.yml via job-level override
 # ─────────────────────────────────────────────────────────────────────────────
 permissions:
-  contents: read
+  contents:    read
+  deployments: write
 
 concurrency:
   group: rollback-${{ inputs.environment }}
@@ -63,10 +60,9 @@ defaults:
   run:
     shell: bash
 
-env:
-  NODE_VERSION: '20.x'
-  APP_NAME: 'ceccoff-frontend'
-
+# ══════════════════════════════════════════════════════════════════════════════
+# 📋 JOBS
+# ══════════════════════════════════════════════════════════════════════════════
 jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
@@ -86,10 +82,9 @@ jobs:
     timeout-minutes: 5
 
     outputs:
-      target_version: ${{ steps.resolve.outputs.target_version }}
+      target_version:  ${{ steps.resolve.outputs.target_version }}
       current_version: ${{ steps.resolve.outputs.current_version }}
-      target_url: ${{ steps.resolve.outputs.target_url }}
-      can_rollback: ${{ steps.resolve.outputs.can_rollback }}
+      can_rollback:    ${{ steps.resolve.outputs.can_rollback }}
 
     steps:
       - name: ⬇️ Checkout código
@@ -128,7 +123,6 @@ jobs:
               if (latestStatus?.state === 'success') {
                 successful.push({
                   version: dep.description?.replace('Version: ', '') || dep.ref,
-                  url: latestStatus.environment_url || '',
                   deployed_at: dep.created_at,
                   id: dep.id
                 });
@@ -154,7 +148,6 @@ jobs:
               // Versão anterior = segunda mais recente com sucesso
               const prev = successful[1];
               core.setOutput('target_version', prev.version);
-              core.setOutput('target_url', prev.url);
               core.setOutput('can_rollback', 'true');
               console.log(`✅ Rollback automático: ${currentVersion} → ${prev.version}`);
 
@@ -172,7 +165,6 @@ jobs:
                 return;
               }
               core.setOutput('target_version', manualTag);
-              core.setOutput('target_url', '');
               core.setOutput('can_rollback', 'true');
               console.log(`✅ Rollback para tag específica: ${currentVersion} → ${manualTag}`);
             }
@@ -195,7 +187,9 @@ jobs:
 
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  🔐 APROVAÇÃO — Gate de segurança                                        ║
+  # ║  🔐 APROVAÇÃO — Gate de segurança humano                                 ║
+  # ║  Usa o GitHub Environment "Rollback - <env>" que deve ter reviewers      ║
+  # ║  configurados em Settings → Environments                                 ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   approve-rollback:
     name: 🔐 Aprovar Rollback — ${{ inputs.environment }}
@@ -208,7 +202,7 @@ jobs:
       name: Rollback - ${{ inputs.environment }}
 
     steps:
-      - name: 🔐 Rollback autorizado — executando
+      - name: 🔐 Rollback autorizado
         run: |
           echo "## 🔐 Rollback Autorizado"                                                 >> "$GITHUB_STEP_SUMMARY"
           echo ""                                                                           >> "$GITHUB_STEP_SUMMARY"
@@ -220,323 +214,97 @@ jobs:
           echo "| 👤 Autorizado por  | @${{ github.actor }}                              |" >> "$GITHUB_STEP_SUMMARY"
           echo "| 📅 Autorizado em   | $(date -u '+%Y-%m-%d %H:%M:%S UTC')               |" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 📣 Notificar Slack — Rollback iniciando
-        run: |
-          ENV="${{ inputs.environment }}"
-          FROM="${{ needs.detect-version.outputs.current_version }}"
-          TO="${{ needs.detect-version.outputs.target_version }}"
-          echo "⏪ [FAKE] Notificação PRÉ-rollback enviada ao Slack: ${ENV^^} ${FROM} → ${TO}"
-
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  🔵 ROLLBACK DEV                                                         ║
+  # ║  Delega ciclo completo ao reusable-deploy.yml                            ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   rollback-dev:
     name: ↩️ Rollback → DEV
-    runs-on: ubuntu-latest
     needs: [detect-version, approve-rollback]
     if: ${{ inputs.environment == 'dev' && needs.approve-rollback.result == 'success' }}
-    timeout-minutes: 20
+    uses: ./.github/workflows/reusable-deploy.yml
     permissions:
       deployments: write
       contents:    read
+    secrets:
+      VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+      API_URL:           ${{ secrets.DEV_API_URL }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_DEV }}
+    with:
+      environment:        dev
+      github-environment: DEV - Deploy
+      label:              DEV
+      emoji:              🔵
+      config:             development
+      version:            ${{ needs.detect-version.outputs.target_version }}
+      build-script:       build:dev
+      ref:                ${{ needs.detect-version.outputs.target_version }}
+      rollback:           'true'
+      rollback-from:      ${{ needs.detect-version.outputs.current_version }}
 
-    environment:
-      name: DEV - Deploy
-      url: ${{ steps.deploy.outputs.url }}
-
-    steps:
-      - name: ⬇️ Checkout versão alvo (${{ needs.detect-version.outputs.target_version }})
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.detect-version.outputs.target_version }}
-          fetch-depth: 0
-
-      - name: 🛠️ Setup Node + npm ci + Vercel CLI
-        uses: ./.github/actions/setup-deps
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: 🔧 Gerar environment.ts — DEV
-        uses: ./.github/actions/generate-env-file
-        with:
-          environment: dev
-          api-url:     ${{ secrets.DEV_API_URL }}
-          version:     ${{ needs.detect-version.outputs.target_version }}
-
-      - name: 🏗️ Build Angular — DEV (rollback)
-        id: build
-        uses: ./.github/actions/angular-build
-        with:
-          script: build:dev
-          label:  DEV (Rollback)
-
-      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
-        uses: ./.github/actions/vercel-build-output
-        with:
-          app-name: ${{ env.APP_NAME }}
-
-      - name: ↩️ Vercel Deploy — DEV (rollback)
-        id: deploy
-        uses: ./.github/actions/vercel-deploy
-        with:
-          token:        ${{ secrets.VERCEL_TOKEN }}
-          org-id:       ${{ secrets.VERCEL_ORG_ID }}
-          project-id:   ${{ secrets.VERCEL_PROJECT_ID_DEV }}
-          environment:  dev
-          version:      ${{ needs.detect-version.outputs.target_version }}
-          prev-version: ${{ needs.detect-version.outputs.current_version }}
-          rollback:     'true'
-          rollback-from: ${{ needs.detect-version.outputs.current_version }}
-
-      - name: 💾 Registrar rollback no histórico — DEV
-        uses: ./.github/actions/register-deployment
-        with:
-          environment: dev
-          version:     ${{ needs.detect-version.outputs.target_version }}
-          url:         ${{ steps.deploy.outputs.url }}
-          description: 'Rollback from ${{ needs.detect-version.outputs.current_version }}'
-
-      - name: 🏥 Health Check pós-rollback — DEV
-        id: health
-        uses: ./.github/actions/health-check
-        with:
-          url:     ${{ steps.deploy.outputs.url }}
-          retries: '6'
-          wait:    '10'
-
-      - name: 📊 Sumário — Rollback DEV
-        if: always()
-        uses: ./.github/actions/deploy-summary
-        with:
-          environment:   dev
-          label:         DEV (Rollback)
-          emoji:         ↩️
-          config:        development
-          version:       ${{ needs.detect-version.outputs.target_version }}
-          url:           ${{ steps.deploy.outputs.url }}
-          prev-version:  ${{ needs.detect-version.outputs.current_version }}
-          build-outcome: ${{ steps.build.outcome }}
-          health-status: ${{ steps.health.outputs.status }}
-          actor:         ${{ github.actor }}
-
-      - name: 📣 Notificar Slack — Rollback DEV concluído
-        if: always()
-        run: |
-          RESULT="${{ job.status }}"
-          FROM="${{ needs.detect-version.outputs.current_version }}"
-          TO="${{ needs.detect-version.outputs.target_version }}"
-          ICON=$([[ "${RESULT}" == "success" ]] && echo "✅" || echo "❌")
-          echo "${ICON} [FAKE] Notificação PÓS-rollback DEV enviada ao Slack: ${FROM} → ${TO}"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  🟡 ROLLBACK HML                                                         ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   rollback-hml:
     name: ↩️ Rollback → HML
-    runs-on: ubuntu-latest
     needs: [detect-version, approve-rollback]
     if: ${{ inputs.environment == 'hml' && needs.approve-rollback.result == 'success' }}
-    timeout-minutes: 25
+    uses: ./.github/workflows/reusable-deploy.yml
     permissions:
       deployments: write
       contents:    read
+    secrets:
+      VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+      API_URL:           ${{ secrets.HML_API_URL }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_HML }}
+    with:
+      environment:        hml
+      github-environment: HML - Deploy
+      label:              HML
+      emoji:              🟡
+      config:             staging
+      version:            ${{ needs.detect-version.outputs.target_version }}
+      build-script:       build:staging
+      strict-health:      'true'
+      health-retries:     '8'
+      health-wait:        '15'
+      ref:                ${{ needs.detect-version.outputs.target_version }}
+      rollback:           'true'
+      rollback-from:      ${{ needs.detect-version.outputs.current_version }}
 
-    environment:
-      name: HML - Deploy
-      url: ${{ steps.deploy.outputs.url }}
-
-    steps:
-      - name: ⬇️ Checkout versão alvo (${{ needs.detect-version.outputs.target_version }})
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.detect-version.outputs.target_version }}
-          fetch-depth: 0
-
-      - name: 🛠️ Setup Node + npm ci + Vercel CLI
-        uses: ./.github/actions/setup-deps
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: 🔧 Gerar environment.ts — HML
-        uses: ./.github/actions/generate-env-file
-        with:
-          environment: hml
-          api-url:     ${{ secrets.HML_API_URL }}
-          version:     ${{ needs.detect-version.outputs.target_version }}
-
-      - name: 🏗️ Build Angular — HML (rollback)
-        id: build
-        uses: ./.github/actions/angular-build
-        with:
-          script: build:staging
-          label:  HML (Rollback)
-
-      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
-        uses: ./.github/actions/vercel-build-output
-        with:
-          app-name: ${{ env.APP_NAME }}
-
-      - name: ↩️ Vercel Deploy — HML (rollback)
-        id: deploy
-        uses: ./.github/actions/vercel-deploy
-        with:
-          token:        ${{ secrets.VERCEL_TOKEN }}
-          org-id:       ${{ secrets.VERCEL_ORG_ID }}
-          project-id:   ${{ secrets.VERCEL_PROJECT_ID_HML }}
-          environment:  hml
-          version:      ${{ needs.detect-version.outputs.target_version }}
-          prev-version: ${{ needs.detect-version.outputs.current_version }}
-          rollback:     'true'
-          rollback-from: ${{ needs.detect-version.outputs.current_version }}
-
-      - name: 💾 Registrar rollback no histórico — HML
-        uses: ./.github/actions/register-deployment
-        with:
-          environment: hml
-          version:     ${{ needs.detect-version.outputs.target_version }}
-          url:         ${{ steps.deploy.outputs.url }}
-          description: 'Rollback from ${{ needs.detect-version.outputs.current_version }}'
-
-      - name: 🏥 Health Check pós-rollback — HML
-        id: health
-        uses: ./.github/actions/health-check
-        with:
-          url:     ${{ steps.deploy.outputs.url }}
-          retries: '8'
-          wait:    '15'
-          timeout: '15'
-          strict:  'true'
-
-      - name: 📊 Sumário — Rollback HML
-        if: always()
-        uses: ./.github/actions/deploy-summary
-        with:
-          environment:   hml
-          label:         HML (Rollback)
-          emoji:         ↩️
-          config:        staging
-          version:       ${{ needs.detect-version.outputs.target_version }}
-          url:           ${{ steps.deploy.outputs.url }}
-          prev-version:  ${{ needs.detect-version.outputs.current_version }}
-          build-outcome: ${{ steps.build.outcome }}
-          health-status: ${{ steps.health.outputs.status }}
-          actor:         ${{ github.actor }}
-
-      - name: 📣 Notificar Slack — Rollback HML concluído
-        if: always()
-        run: |
-          RESULT="${{ job.status }}"
-          FROM="${{ needs.detect-version.outputs.current_version }}"
-          TO="${{ needs.detect-version.outputs.target_version }}"
-          ICON=$([[ "${RESULT}" == "success" ]] && echo "✅" || echo "❌")
-          echo "${ICON} [FAKE] Notificação PÓS-rollback HML enviada ao Slack: ${FROM} → ${TO}"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  🔴 ROLLBACK PRD                                                         ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   rollback-prd:
     name: ↩️ Rollback → PRD
-    runs-on: ubuntu-latest
     needs: [detect-version, approve-rollback]
     if: ${{ inputs.environment == 'prd' && needs.approve-rollback.result == 'success' }}
-    timeout-minutes: 30
+    uses: ./.github/workflows/reusable-deploy.yml
     permissions:
       deployments: write
       contents:    read
-
-    environment:
-      name: PRD - Deploy
-      url: ${{ steps.deploy.outputs.url }}
-
-    steps:
-      - name: ⬇️ Checkout versão alvo (${{ needs.detect-version.outputs.target_version }})
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.detect-version.outputs.target_version }}
-          fetch-depth: 0
-
-      - name: 🛠️ Setup Node + npm ci + Vercel CLI
-        uses: ./.github/actions/setup-deps
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: 🔧 Gerar environment.ts — PRD
-        uses: ./.github/actions/generate-env-file
-        with:
-          environment: prd
-          api-url:     ${{ secrets.PRD_API_URL }}
-          version:     ${{ needs.detect-version.outputs.target_version }}
-
-      - name: 🏗️ Build Angular — PRD (rollback)
-        id: build
-        uses: ./.github/actions/angular-build
-        with:
-          script: build:prod
-          label:  PRD (Rollback)
-
-      - name: 🗂️ Preparar Vercel Build Output (SPA prebuilt)
-        uses: ./.github/actions/vercel-build-output
-        with:
-          app-name: ${{ env.APP_NAME }}
-
-      - name: ↩️ Vercel Deploy — PRD (rollback)
-        id: deploy
-        uses: ./.github/actions/vercel-deploy
-        with:
-          token:        ${{ secrets.VERCEL_TOKEN }}
-          org-id:       ${{ secrets.VERCEL_ORG_ID }}
-          project-id:   ${{ secrets.VERCEL_PROJECT_ID_PRD }}
-          environment:  prd
-          version:      ${{ needs.detect-version.outputs.target_version }}
-          prev-version: ${{ needs.detect-version.outputs.current_version }}
-          prod:         'true'
-          rollback:     'true'
-          rollback-from: ${{ needs.detect-version.outputs.current_version }}
-
-      - name: 💾 Registrar rollback no histórico — PRD
-        uses: ./.github/actions/register-deployment
-        with:
-          environment: prd
-          version:     ${{ needs.detect-version.outputs.target_version }}
-          url:         ${{ steps.deploy.outputs.url }}
-          description: 'Rollback from ${{ needs.detect-version.outputs.current_version }}'
-
-      - name: 🏥 Health Check pós-rollback — PRD
-        id: health
-        uses: ./.github/actions/health-check
-        with:
-          url:     ${{ steps.deploy.outputs.url }}
-          retries: '10'
-          wait:    '15'
-          timeout: '15'
-          strict:  'true'
-
-      - name: 📊 Sumário — Rollback PRD
-        if: always()
-        uses: ./.github/actions/deploy-summary
-        with:
-          environment:   prd
-          label:         PRD (Rollback)
-          emoji:         ↩️
-          config:        production
-          version:       ${{ needs.detect-version.outputs.target_version }}
-          url:           ${{ steps.deploy.outputs.url }}
-          prev-version:  ${{ needs.detect-version.outputs.current_version }}
-          build-outcome: ${{ steps.build.outcome }}
-          health-status: ${{ steps.health.outputs.status }}
-          actor:         ${{ github.actor }}
-
-      - name: 📣 Notificar Slack — Rollback PRD concluído
-        if: always()
-        run: |
-          RESULT="${{ job.status }}"
-          FROM="${{ needs.detect-version.outputs.current_version }}"
-          TO="${{ needs.detect-version.outputs.target_version }}"
-          ICON=$([[ "${RESULT}" == "success" ]] && echo "✅" || echo "🚨")
-          echo "${ICON} [FAKE] Notificação PÓS-rollback PRD enviada ao Slack: ${FROM} → ${TO}"
-
-          if [[ "${RESULT}" != "success" ]]; then
-            echo ""
-            echo "🚨 ROLLBACK PRD FALHOU — acione o time de plantão imediatamente!"
-          fi
+    secrets:
+      VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+      API_URL:           ${{ secrets.PRD_API_URL }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_PRD }}
+    with:
+      environment:        prd
+      github-environment: PRD - Deploy
+      label:              PRODUÇÃO
+      emoji:              🔴
+      config:             production
+      version:            ${{ needs.detect-version.outputs.target_version }}
+      build-script:       build:prod
+      prod:               'true'
+      strict-health:      'true'
+      health-retries:     '10'
+      health-wait:        '15'
+      ref:                ${{ needs.detect-version.outputs.target_version }}
+      rollback:           'true'
+      rollback-from:      ${{ needs.detect-version.outputs.current_version }}

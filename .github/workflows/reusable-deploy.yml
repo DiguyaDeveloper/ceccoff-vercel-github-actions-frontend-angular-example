@@ -97,6 +97,24 @@ on:
         required: false
         default: 'ceccoff-frontend'
 
+      ref:
+        description: 'Git ref para checkout (tag/SHA). Vazio = commit atual. Usado em rollbacks.'
+        type: string
+        required: false
+        default: ''
+
+      rollback:
+        description: 'true para rollback — desativa snapshot-prev-version e sinaliza metadados'
+        type: string
+        required: false
+        default: 'false'
+
+      rollback-from:
+        description: 'Versão sendo revertida (ex: v1.3.0). Obrigatório quando rollback=true.'
+        type: string
+        required: false
+        default: ''
+
     # ─── Secrets ───────────────────────────────────────────────────────────────
     secrets:
       VERCEL_TOKEN:
@@ -138,6 +156,8 @@ jobs:
     steps:
       - name: ⬇️ Checkout código
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}  # vazio = HEAD atual; rollback = tag alvo
 
       - name: 🛠️ Setup Node + npm ci + Vercel CLI
         uses: ./.github/actions/setup-deps
@@ -146,6 +166,7 @@ jobs:
 
       - name: 💾 Snapshot versão anterior — ${{ inputs.environment }}
         id: snapshot
+        if: inputs.rollback != 'true'
         uses: ./.github/actions/snapshot-prev-version
         with:
           environment: ${{ inputs.environment }}
@@ -179,15 +200,18 @@ jobs:
           environment:  ${{ inputs.environment }}
           version:      ${{ inputs.version }}
           sha-short:    ${{ inputs.sha-short }}
-          prev-version: ${{ steps.snapshot.outputs.prev_version }}
+          prev-version: ${{ (inputs.rollback == 'true' && inputs.rollback-from) || steps.snapshot.outputs.prev_version }}
           prod:         ${{ inputs.prod }}
+          rollback:      ${{ inputs.rollback }}
+          rollback-from: ${{ inputs.rollback-from }}
 
       - name: 💾 Registrar deployment no GitHub Deployments API
         uses: ./.github/actions/register-deployment
         with:
-          environment: ${{ inputs.environment }}
-          version:     ${{ inputs.version }}
-          url:         ${{ steps.deploy.outputs.url }}
+          environment:  ${{ inputs.environment }}
+          version:      ${{ inputs.version }}
+          url:          ${{ steps.deploy.outputs.url }}
+          description:  ${{ inputs.rollback == 'true' && format('Rollback de {0} para {1}', inputs.rollback-from, inputs.version) || format('Deploy {0}', inputs.version) }}
 
       - name: 🏥 Health Check — ${{ inputs.label }}
         id: health
@@ -209,7 +233,7 @@ jobs:
           version:       ${{ inputs.version }}
           sha-short:     ${{ inputs.sha-short }}
           url:           ${{ steps.deploy.outputs.url }}
-          prev-version:  ${{ steps.snapshot.outputs.prev_version }}
+          prev-version:  ${{ (inputs.rollback == 'true' && inputs.rollback-from) || steps.snapshot.outputs.prev_version }}
           build-outcome: ${{ steps.build.outcome }}
           health-status: ${{ steps.health.outputs.status }}
           actor:         ${{ github.actor }}
