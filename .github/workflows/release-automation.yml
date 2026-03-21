@@ -8,7 +8,7 @@
 # ║    2. Determina próxima versão:                                              ║
 # ║         feat → minor · fix/perf/refactor → patch · BREAKING → major        ║
 # ║    3. Atualiza package.json com a nova versão                               ║
-# ║    4. Commita com "[skip ci]" → não re-dispara este workflow                ║
+# ║    4. Commita o bump do package.json (chore(release): ...)                  ║
 # ║    5. Cria e faz push da tag vX.Y.Z                                         ║
 # ║    6. Tag push dispara automaticamente o pipeline.yml (CI/CD completo)      ║
 # ║                                                                              ║
@@ -25,8 +25,10 @@ name: 🔖 Release Automation
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 🎯 TRIGGER — Executado em todo push na main (merge de PR)
-# Commits com [skip ci] são ignorados automaticamente pelo GitHub Actions
-# (o commit de bump do semantic-release usa [skip ci])
+# O job tem if: para ignorar commits chore(release): e evitar loop:
+#   PR merge → este workflow roda → cria commit chore(release) + tag
+#   commit re-push main → este workflow ignora (if: filtra) ✓
+#   tag push → pipeline.yml dispara ✓
 # ─────────────────────────────────────────────────────────────────────────────
 on:
   push:
@@ -60,6 +62,9 @@ jobs:
     name: 🔖 Semantic Release
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Evita loop: o commit de bump chore(release): re-dispararia este workflow.
+    # [skip ci] NÃO é usado pois impediria o pipeline.yml de rodar via tag push.
+    if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
 
     outputs:
       released: ${{ steps.release.outputs.new_release_published }}
@@ -119,7 +124,7 @@ jobs:
             echo "| Item | Detalhe |"                                                                >> "$GITHUB_STEP_SUMMARY"
             echo "|------|---------|"                                                                >> "$GITHUB_STEP_SUMMARY"
             echo "| 🏷️ Nova versão  | \`v${VERSION}\` |"                                            >> "$GITHUB_STEP_SUMMARY"
-            echo "| 📦 package.json | Atualizado e commitado com \`[skip ci]\` |"                   >> "$GITHUB_STEP_SUMMARY"
+            echo "| 📦 package.json | Atualizado e commitado (\`chore(release):\`) |"               >> "$GITHUB_STEP_SUMMARY"
             echo "| 🏷️ Tag          | \`v${VERSION}\` criada e enviada ao repositório |"            >> "$GITHUB_STEP_SUMMARY"
             echo "| 🚀 Pipeline     | Disparado automaticamente pela tag \`v${VERSION}\` |"         >> "$GITHUB_STEP_SUMMARY"
             echo "| 👤 Por          | @${{ github.actor }} (merge de PR) |"                         >> "$GITHUB_STEP_SUMMARY"
