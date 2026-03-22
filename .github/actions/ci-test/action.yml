@@ -1,0 +1,152 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  🧪 Composite Action: ci-test                                              ║
+# ║                                                                              ║
+# ║  Jest + cobertura. Upload de artifact e comentário de coverage no PR.      ║
+# ║  IMPORTANTE: actions/checkout deve rodar ANTES desta action no job         ║
+# ║  (actions locais só são carregadas após o repo estar disponível)           ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 'CI — Testes'
+description: 'Jest + coverage. Requer actions/checkout antes no job chamador.'
+
+inputs:
+  node-version:
+    description: 'Versão do Node.js'
+    required: false
+    default: '22.x'
+
+  upload-artifact:
+    description: "Upload do relatório de coverage como artifact ('true'/'false')"
+    required: false
+    default: 'true'
+
+  artifact-name:
+    description: 'Nome do artifact de coverage'
+    required: false
+    default: 'coverage'
+
+  artifact-retention-days:
+    description: 'Dias de retenção do artifact'
+    required: false
+    default: '14'
+
+  comment-pr:
+    description: "Postar coverage como comentário no PR ('true'/'false')"
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: 🟢 Setup Node.js ${{ inputs.node-version }}
+      uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: 'npm'
+
+    - name: 📥 Instalar dependências
+      shell: bash
+      run: npm ci --prefer-offline
+
+    - name: 🧪 Testes unitários
+      id: tests
+      shell: bash
+      run: npm run test:ci
+
+    - name: 📈 Coverage — Sumário
+      if: always()
+      shell: bash
+      run: |
+        SUMMARY="coverage/coverage-summary.json"
+        if [[ ! -f "$SUMMARY" ]]; then
+          echo "⚠️ coverage-summary.json não encontrado." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        icon() { awk "BEGIN { print ($1 >= 80) ? \"🟢\" : ($1 >= 60) ? \"🟡\" : \"🔴\" }"; }
+
+        STMTS=$(jq '.total.statements.pct' "$SUMMARY")
+        BRANCH=$(jq '.total.branches.pct'  "$SUMMARY")
+        FUNCS=$(jq  '.total.functions.pct'  "$SUMMARY")
+        LINES=$(jq  '.total.lines.pct'      "$SUMMARY")
+
+        {
+          echo "## 📈 Coverage Report — Node ${{ inputs.node-version }}"
+          echo ""
+          echo "| Métrica    | Cobertura | |"
+          echo "|------------|-----------|---|"
+          echo "| Statements | ${STMTS}%  | $(echo "$STMTS"  | icon) |"
+          echo "| Branches   | ${BRANCH}% | $(echo "$BRANCH" | icon) |"
+          echo "| Functions  | ${FUNCS}%  | $(echo "$FUNCS"  | icon) |"
+          echo "| Lines      | ${LINES}%  | $(echo "$LINES"  | icon) |"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: 💬 Comentar coverage no PR
+      if: inputs.comment-pr == 'true' && always()
+      uses: actions/github-script@v8
+      with:
+        script: |
+          const fs = require('fs');
+          const summaryPath = 'coverage/coverage-summary.json';
+
+          if (!fs.existsSync(summaryPath)) {
+            core.warning('coverage-summary.json não encontrado — comentário ignorado.');
+            return;
+          }
+
+          const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8')).total;
+          const fmt = (n) => `${n.toFixed(1)}%`;
+          const icon = (pct) => pct >= 80 ? '🟢' : pct >= 60 ? '🟡' : '🔴';
+
+          const stmts  = summary.statements.pct;
+          const branch = summary.branches.pct;
+          const funcs  = summary.functions.pct;
+          const lines  = summary.lines.pct;
+
+          const body = [
+            '## 📈 Coverage Report',
+            '',
+            `| Métrica    | Cobertura | |`,
+            `|------------|-----------|---|`,
+            `| Statements | ${fmt(stmts)}  | ${icon(stmts)}  |`,
+            `| Branches   | ${fmt(branch)} | ${icon(branch)} |`,
+            `| Functions  | ${fmt(funcs)}  | ${icon(funcs)}  |`,
+            `| Lines      | ${fmt(lines)}  | ${icon(lines)}  |`,
+            '',
+            `> Node.js ${{ inputs.node-version }} · commit \`${{ github.sha }}\``,
+          ].join('\n');
+
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo:  context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const existing = comments.find(c =>
+            c.user.login === 'github-actions[bot]' &&
+            c.body.startsWith('## 📈 Coverage Report')
+          );
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner:      context.repo.owner,
+              repo:       context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }
+
+    - name: 📦 Upload relatório de coverage
+      if: inputs.upload-artifact == 'true' && always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: coverage/
+        retention-days: ${{ inputs.artifact-retention-days }}

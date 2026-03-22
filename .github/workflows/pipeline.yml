@@ -7,11 +7,11 @@
 # ║                                                                              ║
 # ║  Stages:                                                                     ║
 # ║    1 · setup      → detecta versão/SHA                                      ║
-# ║    2 · lint       → ESLint + TypeScript type-check (feedback ~30s)         ║
-# ║      · test       → matrix Node 20+22 (testes unitários + coverage)        ║
-# ║      · security   → npm audit (paralelo)                                   ║
-# ║      · quality-gate → agrega lint+test+security (bridge p/ reusable call) ║
-# ║    3 · deploy-dev + deploy-hml (paralelos)                                 ║
+# ║    2 · lint       → ci-lint action (ESLint + tsc)                          ║
+# ║      · test       → ci-test action (matrix Node 20+22)                     ║
+# ║      · security   → ci-security action (npm audit HIGH+CRITICAL)           ║
+# ║      · quality-gate → agrega lint+test+security                            ║
+# ║    3 · deploy-dev + deploy-hml (paralelos, via reusable-deploy.yml)        ║
 # ║    4 · deploy-prd → gate humano via GitHub Environment "PRD - Deploy"      ║
 # ║    5 · release    → GitHub Release com changelog automático                 ║
 # ║                                                                              ║
@@ -29,52 +29,32 @@
 
 name: 🚀 Pipeline CI/CD
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 🎯 TRIGGERS
-# Disparado exclusivamente por push de tag semântica.
-# A tag é criada pelo release-automation.yml após merge de PR na main.
-# ─────────────────────────────────────────────────────────────────────────────
 on:
   push:
     tags:
-      - 'v[0-9]*.[0-9]*.[0-9]*'    # v1.0.0, v2.3.1, v10.20.300 — release estável
+      - 'v[0-9]*.[0-9]*.[0-9]*'    # v1.0.0, v2.3.1 — release estável
       - 'v[0-9]*.[0-9]*.[0-9]*-*'  # v1.0.0-rc.1, v1.0.0-hotfix.1 — pre-release
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 🔒 CONCORRÊNCIA — Evita deploys paralelos no mesmo ambiente
-# ─────────────────────────────────────────────────────────────────────────────
 concurrency:
   group: pipeline-${{ github.ref }}
   cancel-in-progress: false
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 🌍 VARIÁVEIS GLOBAIS
-# ─────────────────────────────────────────────────────────────────────────────
 env:
   NODE_PRIMARY: '22.x'
   APP_NAME: 'ceccoff-frontend'
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 🔒 PERMISSÕES MÍNIMAS (princípio do menor privilégio)
-# Jobs que precisam de mais definem explicitamente (release: contents write)
-# Deploy jobs herdam permissões do reusable-deploy.yml (deployments: write)
-# ─────────────────────────────────────────────────────────────────────────────
 permissions:
   contents:    read
-  deployments: write  # necessário para reusable-deploy.yml (register-deployment)
+  deployments: write
 
 defaults:
   run:
     shell: bash
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 📋 JOBS
-# ══════════════════════════════════════════════════════════════════════════════
 jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 1 — Setup                                                          ║
-  # ║  Detecta versão e SHA. Jobs downstream consomem esses outputs.           ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   setup:
     name: 🏷️ Setup & Versão
@@ -94,23 +74,22 @@ jobs:
       - name: 🏷️ Detectar versão
         id: version
         run: |
-          # Pipeline é disparado por push de tag → GITHUB_REF = refs/tags/vX.Y.Z
           TAG="${GITHUB_REF#refs/tags/}"
           SHA="${GITHUB_SHA::7}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "### 🏷️ Versão: \`${TAG}\` — SHA: \`${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Campo | Valor |"                             >> "$GITHUB_STEP_SUMMARY"
-          echo "|-------|-------|"                             >> "$GITHUB_STEP_SUMMARY"
-          echo "| Tag   | \`${TAG}\` |"                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| SHA   | \`${SHA}\` |"                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| Actor | @${{ github.actor }} |"             >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ref   | \`${{ github.ref }}\` |"           >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### 🏷️ Versão: \`${TAG}\` — SHA: \`${SHA}\`"
+            echo "| Campo | Valor |"
+            echo "|-------|-------|"
+            echo "| Tag   | \`${TAG}\` |"
+            echo "| SHA   | \`${SHA}\` |"
+            echo "| Actor | @${{ github.actor }} |"
+            echo "| Ref   | \`${{ github.ref }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 2a — Lint & Type Check                                            ║
-  # ║  Feedback rápido (~30s). Falha imediata sem aguardar testes mais lentos. ║
-  # ║  Roda: ESLint (ng lint) + verificação TypeScript (tsc --noEmit).        ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   lint:
     name: 🔍 Lint & Type Check
@@ -119,40 +98,16 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: ⬇️ Checkout código
+      - name: ⬇️ Checkout
         uses: actions/checkout@v6
 
-      - name: 🟢 Setup Node.js ${{ env.NODE_PRIMARY }}
-        uses: actions/setup-node@v6
+      - name: 🔍 Lint & Type Check
+        uses: ./.github/actions/ci-lint
         with:
           node-version: ${{ env.NODE_PRIMARY }}
-          cache: 'npm'
-
-      - name: 📥 Instalar dependências
-        run: npm ci --prefer-offline
-
-      - name: 🔍 ESLint
-        id: eslint
-        run: npm run lint
-
-      - name: 🏷️ TypeScript — type check (sem emitir arquivos)
-        id: typecheck
-        run: npx tsc --noEmit
-
-      - name: 📊 Sumário — Lint & Type Check
-        if: always()
-        run: |
-          echo "## 🔍 Lint & Type Check"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                             >> "$GITHUB_STEP_SUMMARY"
-          echo "| Check | Status |"                                                          >> "$GITHUB_STEP_SUMMARY"
-          echo "|-------|--------|"                                                          >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔍 ESLint     | $([[ '${{ steps.eslint.outcome }}'    == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ TypeScript | $([[ '${{ steps.typecheck.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 2b — Testes (Matrix Node 20 + 22)                                 ║
-  # ║  Foco exclusivo em testes unitários + cobertura.                         ║
-  # ║  Lint foi extraído para job dedicado (feedback mais rápido).             ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   test:
     name: 🧪 Testes — Node ${{ matrix.node-version }}
@@ -161,75 +116,25 @@ jobs:
     timeout-minutes: 15
 
     strategy:
-      fail-fast: true   # cancela o par se um falhar
+      fail-fast: true
       matrix:
         node-version: ['20.x', '22.x']
 
     steps:
-      - name: ⬇️ Checkout código
+      - name: ⬇️ Checkout
         uses: actions/checkout@v6
 
-      - name: 🟢 Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: 'npm'
-
-      - name: 📥 Instalar dependências
-        run: npm ci --prefer-offline
-
       - name: 🧪 Testes unitários
-        id: tests
-        run: npm run test:ci
-
-      - name: 📈 Publicar cobertura no sumário
-        if: matrix.node-version == '22.x' && always()
-        run: |
-          SUMMARY_FILE="coverage/coverage-summary.json"
-          if [[ ! -f "$SUMMARY_FILE" ]]; then
-            echo "⚠️ coverage-summary.json não encontrado." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          icon() { awk "BEGIN { print ($1 >= 80) ? \"🟢\" : ($1 >= 60) ? \"🟡\" : \"🔴\" }"; }
-
-          STMTS=$(jq '.total.statements.pct' "$SUMMARY_FILE")
-          BRANCH=$(jq '.total.branches.pct'  "$SUMMARY_FILE")
-          FUNCS=$(jq  '.total.functions.pct'  "$SUMMARY_FILE")
-          LINES=$(jq  '.total.lines.pct'      "$SUMMARY_FILE")
-
-          {
-            echo "## 📈 Coverage Report — Node ${{ matrix.node-version }}"
-            echo ""
-            echo "| Métrica    | Cobertura | |"
-            echo "|------------|-----------|---|"
-            echo "| Statements | ${STMTS}%  | $(echo "$STMTS"  | icon) |"
-            echo "| Branches   | ${BRANCH}% | $(echo "$BRANCH" | icon) |"
-            echo "| Functions  | ${FUNCS}%  | $(echo "$FUNCS"  | icon) |"
-            echo "| Lines      | ${LINES}%  | $(echo "$LINES"  | icon) |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 📦 Upload relatório de coverage
-        if: matrix.node-version == '22.x' && always()
-        uses: actions/upload-artifact@v7
+        uses: ./.github/actions/ci-test
         with:
-          name: coverage-report-${{ needs.setup.outputs.sha_short }}
-          path: coverage/
-          retention-days: 14
-
-      - name: 📊 Sumário — Testes Node ${{ matrix.node-version }}
-        if: always()
-        run: |
-          echo "## 🧪 Testes — Node ${{ matrix.node-version }}"              >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                              >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Status |"                                            >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|--------|"                                            >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão | \`${{ needs.setup.outputs.version }}\` |"      >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🧪 Testes | $([[ '${{ steps.tests.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
+          node-version:            ${{ matrix.node-version }}
+          upload-artifact:         ${{ matrix.node-version == '22.x' && 'true' || 'false' }}
+          artifact-name:           coverage-report-${{ needs.setup.outputs.sha_short }}
+          artifact-retention-days: '14'
+          comment-pr:              'false'
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 2c — Security Scan (paralelo a lint e test)                       ║
-  # ║  Auditoria de dependências. Falha em vulnerabilidades HIGH ou CRITICAL.  ║
+  # ║  STAGE 2c — Security Scan                                                ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   security:
     name: 🔒 Security Scan
@@ -238,58 +143,14 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: ⬇️ Checkout código
+      - name: ⬇️ Checkout
         uses: actions/checkout@v6
 
-      - name: 🟢 Setup Node.js ${{ env.NODE_PRIMARY }}
-        uses: actions/setup-node@v6
+      - name: 🔒 Security Audit
+        uses: ./.github/actions/ci-security
         with:
           node-version: ${{ env.NODE_PRIMARY }}
-          cache: 'npm'
-
-      - name: 📥 Instalar dependências
-        run: npm ci --prefer-offline
-
-      - name: 🔒 npm audit — dependências de produção
-        id: audit
-        run: |
-          # --omit=dev: exclui devDependencies (ferramentas de build, etc.)
-          # --audit-level=high: falha em HIGH e CRITICAL
-          npm audit --audit-level=high --omit=dev 2>&1 | tee audit-output.txt
-          EXIT_CODE=${PIPESTATUS[0]}
-
-          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
-          if [[ ${EXIT_CODE} -eq 0 ]]; then
-            echo "status=passed" >> "$GITHUB_OUTPUT"
-          else
-            echo "status=failed" >> "$GITHUB_OUTPUT"
-          fi
-          exit ${EXIT_CODE}
-
-      - name: 📊 Sumário — Security Scan
-        if: always()
-        run: |
-          STATUS="${{ steps.audit.outputs.status }}"
-          ICON=$([[ "${STATUS}" == "passed" ]] && echo "✅ Nenhuma vulnerabilidade HIGH/CRITICAL" || echo "❌ Vulnerabilidades encontradas — ver log")
-
-          echo "## 🔒 Security Scan"                                           >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                               >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Detalhe |"                                            >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|---------|"                                            >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão | \`${{ needs.setup.outputs.version }}\` |"       >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔍 Escopo | Dependências de produção (\`--omit=dev\`) |"    >> "$GITHUB_STEP_SUMMARY"
-          echo "| 📊 Nível  | HIGH + CRITICAL |"                              >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔒 Status | ${ICON} |"                                      >> "$GITHUB_STEP_SUMMARY"
-
-          if [[ -f audit-output.txt ]]; then
-            echo ""                                                             >> "$GITHUB_STEP_SUMMARY"
-            echo "<details><summary>📋 Output completo do npm audit</summary>" >> "$GITHUB_STEP_SUMMARY"
-            echo ""                                                             >> "$GITHUB_STEP_SUMMARY"
-            echo '```'                                                         >> "$GITHUB_STEP_SUMMARY"
-            head -50 audit-output.txt                                          >> "$GITHUB_STEP_SUMMARY"
-            echo '```'                                                         >> "$GITHUB_STEP_SUMMARY"
-            echo "</details>"                                                  >> "$GITHUB_STEP_SUMMARY"
-          fi
+          audit-level:  'high'
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 2d — Quality Gate                                                 ║
@@ -311,13 +172,15 @@ jobs:
           TEST="${{ needs.test.result }}"
           SEC="${{ needs.security.result }}"
 
-          echo "## ✅ Quality Gate"                                            >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                               >> "$GITHUB_STEP_SUMMARY"
-          echo "| Check    | Status |"                                         >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|--------|"                                         >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔍 Lint     | ${LINT} |"                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🧪 Testes   | ${TEST} |"                                    >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔒 Security | ${SEC} |"                                     >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## ✅ Quality Gate"
+            echo ""
+            echo "| Check    | Status |"
+            echo "|----------|--------|"
+            echo "| 🔍 Lint     | ${LINT} |"
+            echo "| 🧪 Testes   | ${TEST} |"
+            echo "| 🔒 Security | ${SEC} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           if [[ "${LINT}" != "success" || "${TEST}" != "success" || "${SEC}" != "success" ]]; then
             echo "❌ Quality gate falhou — deploy bloqueado."
@@ -327,7 +190,6 @@ jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 3 — Deploy DEV                                                    ║
-  # ║  Reusable workflow encapsula: build → vercel → register → health → sumário║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-dev:
     name: 🔵 Deploy → DEV
@@ -351,7 +213,6 @@ jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 3 — Deploy HML (paralelo ao DEV)                                  ║
-  # ║  strict-health=true: pipeline falha se HML unhealthy após deploy.        ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-hml:
     name: 🟡 Deploy → HML
@@ -378,8 +239,6 @@ jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  STAGE 4 — Deploy PRD                                                    ║
-  # ║  Executa automaticamente após HML saudável.                              ║
-  # ║  Gate humano: GitHub Environment "PRD - Deploy" (required reviewers).   ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   deploy-prd:
     name: 🔴 Deploy → PRD
@@ -406,11 +265,7 @@ jobs:
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_PRD }}
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  STAGE 6 — Release (automático)                                          ║
-  # ║  Sem gate humano. Executa assim que PRD está live:                        ║
-  # ║    · GitHub Release com changelog gerado automaticamente (--generate-notes)║
-  # ║    · Notificação Slack #deployments                                       ║
-  # ║    · Limpeza de gates pendentes via PAT_REJECT_TOKEN                     ║
+  # ║  STAGE 5 — Release                                                       ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   release:
     name: 🎉 Release
@@ -419,8 +274,8 @@ jobs:
     if: ${{ needs.deploy-prd.result == 'success' }}
     timeout-minutes: 10
     permissions:
-      contents:    write  # criar GitHub Release
-      actions:     write  # rejeitar gates pendentes
+      contents:    write
+      actions:     write
       deployments: write
 
     steps:
@@ -429,43 +284,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 🏷️ Criar GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          VERSION="${{ needs.setup.outputs.version }}"
-
-          # --generate-notes: changelog automático a partir dos PRs desde a tag anterior
-          # Pre-release (sufixo ex: v1.0.0-rc.1): usa --no-latest para não substituir
-          # Release estável: marca como --latest (padrão desejado)
-          if [[ "${VERSION}" == *"-"* ]]; then
-            gh release create "${VERSION}" \
-              --title "${VERSION}" \
-              --generate-notes \
-              --prerelease \
-              --no-latest \
-              2>/dev/null \
-              || echo "ℹ️ Release ${VERSION} já existe — ignorando."
-          else
-            gh release create "${VERSION}" \
-              --title "${VERSION}" \
-              --generate-notes \
-              --latest \
-              2>/dev/null \
-              || echo "ℹ️ Release ${VERSION} já existe — ignorando."
-          fi
+      - name: 🎉 Criar GitHub Release
+        uses: ./.github/actions/create-release
+        with:
+          version:      ${{ needs.setup.outputs.version }}
+          github-token: ${{ github.token }}
+          repo:         ${{ github.repository }}
+          prerelease:   ${{ contains(needs.setup.outputs.version, '-') && 'true' || 'false' }}
+          no-latest:    ${{ contains(needs.setup.outputs.version, '-') && 'true' || 'false' }}
+          prd-url:      ${{ needs.deploy-prd.outputs.url }}
 
       - name: 📣 Notificar Slack — PRD Live
         run: |
           VERSION="${{ needs.setup.outputs.version }}"
           SHA="${{ needs.setup.outputs.sha_short }}"
-          URL="${{ needs.deploy-prd.outputs.url }}"
           ACTOR="${{ github.actor }}"
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          REPO="${{ github.repository }}"
-
-          # TODO: Ativar notificação Slack quando SLACK_WEBHOOK_URL estiver configurado
-          # Substituir o echo abaixo pelo curl com slackapi/slack-github-action@v2
+          # TODO: Ativar quando SLACK_WEBHOOK_URL estiver configurado
           echo "✅ [PLACEHOLDER] Slack #deployments: ${VERSION} live em PRD por @${ACTOR} às ${TIMESTAMP}"
 
       - name: 🧹 Rejeitar gates pendentes
@@ -505,27 +340,25 @@ jobs:
               }
             }
 
-      - name: 📊 Sumário — Release
+      - name: 📊 Sumário — Pipeline Concluído
         run: |
           VERSION="${{ needs.setup.outputs.version }}"
           SHA="${{ needs.setup.outputs.sha_short }}"
-          URL="${{ needs.deploy-prd.outputs.url }}"
           REPO="${{ github.repository }}"
 
-          echo "## 🎉 Release \`${VERSION}\` — Concluído"                                                    >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                                               >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ambiente | Status |"                                                                         >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|--------|"                                                                         >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔵 DEV   | ✅ Deployado |"                                                                   >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🟡 HML   | ✅ Aprovado  |"                                                                   >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔴 PRD   | ✅ Live      |"                                                                   >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                                               >> "$GITHUB_STEP_SUMMARY"
-          echo "| Item | Detalhe |"                                                                            >> "$GITHUB_STEP_SUMMARY"
-          echo "|------|---------|"                                                                            >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ Versão  | \`${VERSION}\` |"                                                               >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔑 SHA     | \`${SHA}\` |"                                                                   >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔗 URL     | ${URL} |"                                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| 📦 Release | [${VERSION}](https://github.com/${REPO}/releases/tag/${VERSION}) |"            >> "$GITHUB_STEP_SUMMARY"
-          echo "| 👤 Por     | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |"                     >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                                               >> "$GITHUB_STEP_SUMMARY"
-          echo "> 📣 Slack notificado. GitHub Release criado automaticamente com changelog."                  >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## 🎉 Release \`${VERSION}\` — Pipeline Concluído"
+            echo ""
+            echo "| Ambiente | Status |"
+            echo "|----------|--------|"
+            echo "| 🔵 DEV   | ✅ Deployado |"
+            echo "| 🟡 HML   | ✅ Aprovado  |"
+            echo "| 🔴 PRD   | ✅ Live      |"
+            echo ""
+            echo "| Item | Detalhe |"
+            echo "|------|---------|"
+            echo "| 🏷️ Versão  | \`${VERSION}\` |"
+            echo "| 🔑 SHA     | \`${SHA}\` |"
+            echo "| 📦 Release | [${VERSION}](https://github.com/${REPO}/releases/tag/${VERSION}) |"
+            echo "| 👤 Por     | @${{ github.actor }} — $(date -u '+%Y-%m-%d %H:%M UTC') |"
+          } >> "$GITHUB_STEP_SUMMARY"

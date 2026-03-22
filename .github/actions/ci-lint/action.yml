@@ -1,0 +1,52 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  🔍 Composite Action: ci-lint                                              ║
+# ║                                                                              ║
+# ║  ESLint + TypeScript type check (tsc --noEmit).                            ║
+# ║  IMPORTANTE: actions/checkout deve rodar ANTES desta action no job         ║
+# ║  (actions locais só são carregadas após o repo estar disponível)           ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 'CI — Lint & Type Check'
+description: 'ESLint + tsc --noEmit. Requer actions/checkout antes no job chamador.'
+
+inputs:
+  node-version:
+    description: 'Versão do Node.js'
+    required: false
+    default: '22.x'
+
+runs:
+  using: composite
+  steps:
+    - name: 🟢 Setup Node.js ${{ inputs.node-version }}
+      uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: 'npm'
+
+    - name: 📥 Instalar dependências
+      shell: bash
+      run: npm ci --prefer-offline
+
+    - name: 🔍 ESLint
+      id: eslint
+      shell: bash
+      run: npm run lint
+
+    - name: 🏷️ TypeScript type check
+      id: typecheck
+      shell: bash
+      run: npx tsc --noEmit
+
+    - name: 📊 Sumário — Lint & Type Check
+      if: always()
+      shell: bash
+      run: |
+        {
+          echo "## 🔍 Lint & Type Check"
+          echo ""
+          echo "| Check | Status |"
+          echo "|-------|--------|"
+          echo "| 🔍 ESLint     | $([[ '${{ steps.eslint.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |"
+          echo "| 🏷️ TypeScript | $([[ '${{ steps.typecheck.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |"
+        } >> "$GITHUB_STEP_SUMMARY"

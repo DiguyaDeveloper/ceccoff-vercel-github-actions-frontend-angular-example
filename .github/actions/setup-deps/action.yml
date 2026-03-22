@@ -7,17 +7,22 @@
 # ║  Agrupa os 3 passos de setup que se repetem em TODOS os jobs de deploy:     ║
 # ║    1. Setup do Node.js com cache npm                                        ║
 # ║    2. Instalação de dependências (npm ci --prefer-offline)                  ║
-# ║    3. Instalação do Vercel CLI (versão pinada)                              ║
+# ║    3. Instalação do Vercel CLI (versão pinada, opcional)                    ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 name: 'Setup deps'
-description: 'Node.js + npm ci + Vercel CLI. Requer actions/checkout antes no job chamador.'
+description: 'Node.js + npm ci + Vercel CLI (opcional). Requer actions/checkout antes no job chamador.'
 
 inputs:
   node-version:
     description: 'Versão do Node.js'
     required: false
-    default: '20.x'
+    default: '22.x'
+
+  install-vercel-cli:
+    description: 'Instalar Vercel CLI (necessário apenas para jobs de deploy)'
+    required: false
+    default: 'true'
 
 runs:
   using: composite
@@ -33,5 +38,6 @@ runs:
       run: npm ci --prefer-offline
 
     - name: 📦 Instalar Vercel CLI
+      if: inputs.install-vercel-cli == 'true'
       shell: bash
       run: npm install -g vercel@37 --prefer-offline

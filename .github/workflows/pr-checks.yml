@@ -6,9 +6,9 @@
 # ║                                                                              ║
 # ║  Jobs:                                                                       ║
 # ║    · pr-title  → Conventional Commits no título do PR                       ║
-# ║    · lint      → ESLint + tsc --noEmit (feedback ~30s)                     ║
-# ║    · test      → Jest Node 20 + coverage (sem matrix — velocidade)          ║
-# ║    · security  → npm audit produção (HIGH+CRITICAL)                         ║
+# ║    · lint      → ci-lint action (ESLint + tsc)                             ║
+# ║    · test      → ci-test action (Node 22, coverage + comentário no PR)     ║
+# ║    · security  → ci-security action (npm audit HIGH+CRITICAL)              ║
 # ║                                                                              ║
 # ║  Trunk-Based: PRs vivem horas, não dias. Checks rápidos = merge rápido.    ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
@@ -20,18 +20,14 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Cancela o run anterior do mesmo PR quando há novo push.
-# Economiza minutos de Actions e dá feedback mais rápido.
-# ─────────────────────────────────────────────────────────────────────────────
 concurrency:
   group: pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
   contents:      read
-  pull-requests: write  # amannn/action-semantic-pull-request precisa de write para postar status/comentários no PR
-  statuses:      write  # necessário para atualizar check status no commit do PR
+  pull-requests: write
+  statuses:      write
 
 env:
   NODE_VERSION: '22.x'
@@ -44,9 +40,6 @@ jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  Título do PR — Conventional Commits                                      ║
-  # ║  Garante que o título do PR seja um commit message válido.               ║
-  # ║  Padrão: <type>(<scope>): <subject>                                      ║
-  # ║  Exemplo: feat(auth): adicionar login com OAuth2                          ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   pr-title:
     name: 📝 Título — Conventional Commits
@@ -60,7 +53,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # Types alinhados com git-conventions.md do projeto
           types: |
             feat
             fix
@@ -74,7 +66,6 @@ jobs:
             chore
             revert
           requireScope: false
-          # Subject deve iniciar com letra minúscula
           subjectPattern: ^(?![A-Z]).+$
           subjectPatternError: |
             O título do PR deve iniciar com letra minúscula.
@@ -83,7 +74,6 @@ jobs:
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  Lint & Type Check                                                        ║
-  # ║  ESLint com regras Angular 21+ (type-aware) + tsc --noEmit               ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   lint:
     name: 🔍 Lint & Type Check
@@ -95,32 +85,10 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v6
 
-      - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v6
+      - name: 🔍 Lint & Type Check
+        uses: ./.github/actions/ci-lint
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: 📥 Instalar dependências
-        run: npm ci --prefer-offline
-
-      - name: 🔍 ESLint
-        id: eslint
-        run: npm run lint
-
-      - name: 🏷️ TypeScript type check
-        id: typecheck
-        run: npx tsc --noEmit
-
-      - name: 📊 Sumário
-        if: always()
-        run: |
-          echo "## 🔍 Lint & Type Check — PR #${{ github.event.pull_request.number }}" >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                          >> "$GITHUB_STEP_SUMMARY"
-          echo "| Check | Status |"                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "|-------|--------|"                                                       >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🔍 ESLint     | $([[ '${{ steps.eslint.outcome }}'    == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| 🏷️ TypeScript | $([[ '${{ steps.typecheck.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  Testes — Node 22 (sem matrix para feedback rápido em PRs)               ║
@@ -136,121 +104,17 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v6
 
-      - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v6
+      - name: 🧪 Testes + Coverage
+        uses: ./.github/actions/ci-test
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: 📥 Instalar dependências
-        run: npm ci --prefer-offline
-
-      - name: 🧪 Jest
-        id: tests
-        run: npm run test:ci
-
-      - name: 📈 Coverage
-        if: always()
-        run: |
-          SUMMARY="coverage/coverage-summary.json"
-          if [[ ! -f "$SUMMARY" ]]; then
-            echo "⚠️ coverage-summary.json não encontrado." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          icon() { awk "BEGIN { print ($1 >= 80) ? \"🟢\" : ($1 >= 60) ? \"🟡\" : \"🔴\" }"; }
-
-          STMTS=$(jq '.total.statements.pct' "$SUMMARY")
-          BRANCH=$(jq '.total.branches.pct'  "$SUMMARY")
-          FUNCS=$(jq  '.total.functions.pct'  "$SUMMARY")
-          LINES=$(jq  '.total.lines.pct'      "$SUMMARY")
-
-          {
-            echo "## 📈 Coverage — PR #${{ github.event.pull_request.number }}"
-            echo ""
-            echo "| Métrica    | Cobertura | |"
-            echo "|------------|-----------|---|"
-            echo "| Statements | ${STMTS}%  | $(echo "$STMTS"  | icon) |"
-            echo "| Branches   | ${BRANCH}% | $(echo "$BRANCH" | icon) |"
-            echo "| Functions  | ${FUNCS}%  | $(echo "$FUNCS"  | icon) |"
-            echo "| Lines      | ${LINES}%  | $(echo "$LINES"  | icon) |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 💬 Comentar coverage no PR
-        if: always()
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const fs = require('fs');
-            const summaryPath = 'coverage/coverage-summary.json';
-
-            if (!fs.existsSync(summaryPath)) {
-              core.warning('coverage-summary.json não encontrado — comentário ignorado.');
-              return;
-            }
-
-            const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8')).total;
-            const fmt = (n) => `${n.toFixed(1)}%`;
-
-            const icon = (pct) => pct >= 80 ? '🟢' : pct >= 60 ? '🟡' : '🔴';
-
-            const stmts  = summary.statements.pct;
-            const branch = summary.branches.pct;
-            const funcs  = summary.functions.pct;
-            const lines  = summary.lines.pct;
-
-            const body = [
-              '## 📈 Coverage Report',
-              '',
-              `| Métrica | Cobertura | |`,
-              `|---------|-----------|---|`,
-              `| Statements | ${fmt(stmts)}  | ${icon(stmts)}  |`,
-              `| Branches   | ${fmt(branch)} | ${icon(branch)} |`,
-              `| Functions  | ${fmt(funcs)}  | ${icon(funcs)}  |`,
-              `| Lines      | ${fmt(lines)}  | ${icon(lines)}  |`,
-              '',
-              `> Node.js ${{ env.NODE_VERSION }} · commit \`${{ github.sha }}\``,
-            ].join('\n');
-
-            // Atualiza comentário existente ou cria um novo (evita spam de comentários)
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              issue_number: context.issue.number,
-            });
-
-            const existing = comments.find(c =>
-              c.user.login === 'github-actions[bot]' &&
-              c.body.startsWith('## 📈 Coverage Report')
-            );
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner:      context.repo.owner,
-                repo:       context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner:        context.repo.owner,
-                repo:         context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
-
-      - name: 📦 Upload coverage (para comparação futura)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
-          path: coverage/
-          retention-days: 7
+          node-version:            ${{ env.NODE_VERSION }}
+          upload-artifact:         'true'
+          artifact-name:           coverage-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          artifact-retention-days: '7'
+          comment-pr:              'true'
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
   # ║  Security Audit                                                           ║
-  # ║  Verifica dependências de produção. Falha em HIGH+CRITICAL.              ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   security:
     name: 🔒 Security Audit
@@ -262,39 +126,8 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v6
 
-      - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v6
+      - name: 🔒 Security Audit
+        uses: ./.github/actions/ci-security
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - name: 📥 Instalar dependências
-        run: npm ci --prefer-offline
-
-      - name: 🔒 npm audit — dependências de produção
-        id: audit
-        run: |
-          npm audit --audit-level=high --omit=dev 2>&1 | tee audit-output.txt
-          EXIT_CODE=${PIPESTATUS[0]}
-          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
-          exit ${EXIT_CODE}
-
-      - name: 📊 Sumário — Security
-        if: always()
-        run: |
-          STATUS=$([[ '${{ steps.audit.outputs.exit_code }}' == '0' ]] && echo '✅ Nenhuma vulnerabilidade HIGH/CRITICAL' || echo '❌ Vulnerabilidades encontradas')
-          echo "## 🔒 Security Audit — PR #${{ github.event.pull_request.number }}" >> "$GITHUB_STEP_SUMMARY"
-          echo ""                                                                     >> "$GITHUB_STEP_SUMMARY"
-          echo "| Escopo | Nível | Status |"                                         >> "$GITHUB_STEP_SUMMARY"
-          echo "|--------|-------|--------|"                                         >> "$GITHUB_STEP_SUMMARY"
-          echo "| Produção (\`--omit=dev\`) | HIGH + CRITICAL | ${STATUS} |"        >> "$GITHUB_STEP_SUMMARY"
-
-          if [[ -f audit-output.txt ]]; then
-            echo ""                                                                   >> "$GITHUB_STEP_SUMMARY"
-            echo "<details><summary>📋 Output</summary>"                            >> "$GITHUB_STEP_SUMMARY"
-            echo ""                                                                   >> "$GITHUB_STEP_SUMMARY"
-            echo '```'                                                               >> "$GITHUB_STEP_SUMMARY"
-            head -30 audit-output.txt                                                >> "$GITHUB_STEP_SUMMARY"
-            echo '```'                                                               >> "$GITHUB_STEP_SUMMARY"
-            echo "</details>"                                                        >> "$GITHUB_STEP_SUMMARY"
-          fi
+          audit-level:  'high'
