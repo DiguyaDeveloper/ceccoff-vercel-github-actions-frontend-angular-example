@@ -142,14 +142,40 @@ jobs:
 
             if (strategy === 'automatico') {
               if (successful.length < 2) {
-                core.setFailed(`❌ Não há versão anterior em ${env}. Apenas 1 deployment encontrado: ${currentVersion}`);
-                return;
+                // Fallback: histórico de deploys incompleto (deploy anterior ao register-deployment action).
+                // Consulta as git tags semânticas para encontrar a versão imediatamente anterior.
+                console.log(`⚠️ Apenas 1 deployment no histórico. Usando git tags como fallback...`);
+                const { execSync } = require('child_process');
+                let prevTag;
+                try {
+                  // Lista tags semânticas ordenadas por versão, filtra as anteriores à atual
+                  const allTags = execSync(
+                    `git tag --sort=-version:refname | grep -E '^v[0-9]+\\.[0-9]+\\.[0-9]+$'`,
+                    { stdio: 'pipe' }
+                  ).toString().trim().split('\n').filter(Boolean);
+
+                  // Remove a versão atual e pega a próxima
+                  const currentClean = currentVersion.replace(/^Deploy\s+/, '');
+                  const idx = allTags.findIndex(t => t === currentClean);
+                  prevTag = idx >= 0 ? allTags[idx + 1] : allTags[1];
+                } catch (e) {
+                  console.log('Erro ao listar git tags:', e.message);
+                }
+
+                if (!prevTag) {
+                  core.setFailed(`❌ Não há versão anterior em ${env} (histórico API + git tags insuficiente). Use "tag-especifica".`);
+                  return;
+                }
+                core.setOutput('target_version', prevTag);
+                core.setOutput('can_rollback', 'true');
+                console.log(`✅ Rollback via git tags (fallback): ${currentVersion} → ${prevTag}`);
+              } else {
+                // Versão anterior = segunda mais recente com sucesso no histórico de deployments
+                const prev = successful[1];
+                core.setOutput('target_version', prev.version);
+                core.setOutput('can_rollback', 'true');
+                console.log(`✅ Rollback automático: ${currentVersion} → ${prev.version}`);
               }
-              // Versão anterior = segunda mais recente com sucesso
-              const prev = successful[1];
-              core.setOutput('target_version', prev.version);
-              core.setOutput('can_rollback', 'true');
-              console.log(`✅ Rollback automático: ${currentVersion} → ${prev.version}`);
 
             } else {
               // tag-especifica: valida que a tag informada existe
