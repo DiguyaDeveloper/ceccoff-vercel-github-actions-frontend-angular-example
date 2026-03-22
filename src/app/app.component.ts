@@ -15,6 +15,7 @@ import { EnvBadgeComponent } from './shared/env-badge/env-badge.component';
       <nav class="nav">
         <a routerLink="/">Home</a>
         <a routerLink="/dashboard">Dashboard</a>
+        <a routerLink="/about">Sobre o Template</a>
       </nav>
 
       <app-env-badge />
