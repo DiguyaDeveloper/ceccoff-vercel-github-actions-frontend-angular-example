@@ -1,0 +1,78 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  🔒 Composite Action: ci-security                                          ║
+# ║                                                                              ║
+# ║  npm audit para dependências de produção.                                  ║
+# ║  Inclui checkout e setup internamente.                                     ║
+# ║  Input audit-level permite ajuste por contexto:                            ║
+# ║    · 'high'     → pipeline principal e PRs (padrão)                        ║
+# ║    · 'critical' → hotfix (não bloquear em HIGH para emergências)           ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 'CI — Security Audit'
+description: 'npm audit --omit=dev. Inclui checkout e setup internamente.'
+
+inputs:
+  node-version:
+    description: 'Versão do Node.js'
+    required: false
+    default: '22.x'
+
+  audit-level:
+    description: "Nível mínimo para falha: 'high' (padrão) ou 'critical' (hotfix)"
+    required: false
+    default: 'high'
+
+runs:
+  using: composite
+  steps:
+    - name: ⬇️ Checkout
+      uses: actions/checkout@v6
+
+    - name: 🟢 Setup Node.js ${{ inputs.node-version }}
+      uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: 'npm'
+
+    - name: 📥 Instalar dependências
+      shell: bash
+      run: npm ci --prefer-offline
+
+    - name: 🔒 npm audit — dependências de produção
+      id: audit
+      shell: bash
+      run: |
+        npm audit --audit-level=${{ inputs.audit-level }} --omit=dev 2>&1 | tee audit-output.txt
+        EXIT_CODE=${PIPESTATUS[0]}
+        echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+        [[ ${EXIT_CODE} -eq 0 ]] && echo "status=passed" >> "$GITHUB_OUTPUT" || echo "status=failed" >> "$GITHUB_OUTPUT"
+        exit ${EXIT_CODE}
+
+    - name: 📊 Sumário — Security Audit
+      if: always()
+      shell: bash
+      run: |
+        STATUS="${{ steps.audit.outputs.status }}"
+        ICON=$([[ "${STATUS}" == "passed" ]] && echo "✅ Nenhuma vulnerabilidade ${{ inputs.audit-level }}/CRITICAL" || echo "❌ Vulnerabilidades encontradas — ver log")
+
+        {
+          echo "## 🔒 Security Audit"
+          echo ""
+          echo "| Item | Detalhe |"
+          echo "|------|---------|"
+          echo "| 🔍 Escopo | Dependências de produção (\`--omit=dev\`) |"
+          echo "| 📊 Nível  | ${{ inputs.audit-level }} + CRITICAL |"
+          echo "| 🔒 Status | ${ICON} |"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [[ -f audit-output.txt ]]; then
+          {
+            echo ""
+            echo "<details><summary>📋 Output completo do npm audit</summary>"
+            echo ""
+            echo '```'
+            head -50 audit-output.txt
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi

@@ -1,0 +1,95 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  🎉 Composite Action: create-release                                       ║
+# ║                                                                              ║
+# ║  Cria GitHub Release via gh CLI.                                           ║
+# ║  Requer: actions/checkout com fetch-depth: 0 no job chamador.             ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: 'Create Release'
+description: 'Cria GitHub Release via gh CLI. Requer checkout com fetch-depth: 0 no job chamador.'
+
+inputs:
+  version:
+    description: 'Tag semântica da versão (ex: v1.2.3)'
+    required: true
+
+  github-token:
+    description: 'Token para autenticação (secrets.GITHUB_TOKEN ou PAT)'
+    required: true
+
+  repo:
+    description: 'Repositório no formato owner/repo'
+    required: true
+
+  prerelease:
+    description: "Marcar como pre-release ('true'/'false')"
+    required: false
+    default: 'false'
+
+  no-latest:
+    description: "Não marcar como latest ('true'/'false')"
+    required: false
+    default: 'false'
+
+  reason:
+    description: 'Motivo (usado em hotfix para auditoria)'
+    required: false
+    default: ''
+
+  prd-url:
+    description: 'URL do ambiente de produção'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: 🏷️ Criar GitHub Release
+      id: release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        VERSION="${{ inputs.version }}"
+        PRERELEASE="${{ inputs.prerelease }}"
+        NO_LATEST="${{ inputs.no-latest }}"
+        REASON="${{ inputs.reason }}"
+        URL="${{ inputs.prd-url }}"
+
+        FLAGS=""
+        [[ "${PRERELEASE}" == "true" ]] && FLAGS="${FLAGS} --prerelease"
+        [[ "${NO_LATEST}"  == "true" ]] && FLAGS="${FLAGS} --no-latest"
+        [[ "${PRERELEASE}" == "false" && "${NO_LATEST}" == "false" ]] && FLAGS="${FLAGS} --latest"
+
+        if [[ -n "${REASON}" || -n "${URL}" ]]; then
+          NOTES="## 🔥 Hotfix — \`${VERSION}\`"
+          [[ -n "${REASON}" ]] && NOTES="${NOTES}\n\n> 📝 **Motivo:** ${REASON}"
+          [[ -n "${URL}" ]]    && NOTES="${NOTES}\n\n**URL Produção:** ${URL}"
+          gh release create "${VERSION}" \
+            --title "${VERSION}" \
+            --notes "$(printf '%b' "${NOTES}")" \
+            ${FLAGS} \
+            2>/dev/null \
+            || echo "ℹ️ Release ${VERSION} já existe — ignorando."
+        else
+          gh release create "${VERSION}" \
+            --title "${VERSION}" \
+            --generate-notes \
+            ${FLAGS} \
+            2>/dev/null \
+            || echo "ℹ️ Release ${VERSION} já existe — ignorando."
+        fi
+
+    - name: 📊 Sumário — Release
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        REPO="${{ inputs.repo }}"
+        URL="${{ inputs.prd-url }}"
+        PRERELEASE="${{ inputs.prerelease }}"
+
+        {
+          echo "| 📦 Release | [${VERSION}](https://github.com/${REPO}/releases/tag/${VERSION}) |"
+          [[ "${PRERELEASE}" == "true" ]] && echo "| 🏷️ Tipo    | Pre-release (hotfix) |"
+          [[ -n "${URL}" ]] && echo "| 🔗 URL PRD | ${URL} |"
+        } >> "$GITHUB_STEP_SUMMARY"
