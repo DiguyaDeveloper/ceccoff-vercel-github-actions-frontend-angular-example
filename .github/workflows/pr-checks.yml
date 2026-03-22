@@ -34,7 +34,7 @@ permissions:
   statuses:      write  # necessário para atualizar check status no commit do PR
 
 env:
-  NODE_VERSION: '20.x'
+  NODE_VERSION: '22.x'
 
 defaults:
   run:
@@ -123,8 +123,8 @@ jobs:
           echo "| 🏷️ TypeScript | $([[ '${{ steps.typecheck.outcome }}' == 'success' ]] && echo '✅ Passou' || echo '❌ Falhou') |" >> "$GITHUB_STEP_SUMMARY"
 
   # ╔════════════════════════════════════════════════════════════════════════════╗
-  # ║  Testes — Node 20 (sem matrix para feedback rápido em PRs)               ║
-  # ║  Matrix completa (18+20) roda apenas na pipeline de release (tag).       ║
+  # ║  Testes — Node 22 (sem matrix para feedback rápido em PRs)               ║
+  # ║  Matrix completa (20+22) roda apenas na pipeline de release (tag).       ║
   # ╚════════════════════════════════════════════════════════════════════════════╝
   test:
     name: 🧪 Testes
@@ -153,20 +153,92 @@ jobs:
         if: always()
         run: |
           SUMMARY="coverage/coverage-summary.json"
-          if [[ -f "$SUMMARY" ]]; then
-            STMTS=$(jq '.total.statements.pct' "$SUMMARY")
-            BRANCH=$(jq '.total.branches.pct'  "$SUMMARY")
-            FUNCS=$(jq  '.total.functions.pct'  "$SUMMARY")
-            LINES=$(jq  '.total.lines.pct'      "$SUMMARY")
-
-            echo "## 📈 Coverage — PR #${{ github.event.pull_request.number }}" >> "$GITHUB_STEP_SUMMARY"
-            echo ""                                                               >> "$GITHUB_STEP_SUMMARY"
-            echo "| Statements | Branches | Functions | Lines |"                 >> "$GITHUB_STEP_SUMMARY"
-            echo "|-----------|----------|-----------|-------|"                 >> "$GITHUB_STEP_SUMMARY"
-            echo "| ${STMTS}% | ${BRANCH}% | ${FUNCS}% | ${LINES}% |"           >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "⚠️ coverage-summary.json não encontrado."                     >> "$GITHUB_STEP_SUMMARY"
+          if [[ ! -f "$SUMMARY" ]]; then
+            echo "⚠️ coverage-summary.json não encontrado." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
+
+          icon() { awk "BEGIN { print ($1 >= 80) ? \"🟢\" : ($1 >= 60) ? \"🟡\" : \"🔴\" }"; }
+
+          STMTS=$(jq '.total.statements.pct' "$SUMMARY")
+          BRANCH=$(jq '.total.branches.pct'  "$SUMMARY")
+          FUNCS=$(jq  '.total.functions.pct'  "$SUMMARY")
+          LINES=$(jq  '.total.lines.pct'      "$SUMMARY")
+
+          {
+            echo "## 📈 Coverage — PR #${{ github.event.pull_request.number }}"
+            echo ""
+            echo "| Métrica    | Cobertura | |"
+            echo "|------------|-----------|---|"
+            echo "| Statements | ${STMTS}%  | $(echo "$STMTS"  | icon) |"
+            echo "| Branches   | ${BRANCH}% | $(echo "$BRANCH" | icon) |"
+            echo "| Functions  | ${FUNCS}%  | $(echo "$FUNCS"  | icon) |"
+            echo "| Lines      | ${LINES}%  | $(echo "$LINES"  | icon) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 💬 Comentar coverage no PR
+        if: always()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const summaryPath = 'coverage/coverage-summary.json';
+
+            if (!fs.existsSync(summaryPath)) {
+              core.warning('coverage-summary.json não encontrado — comentário ignorado.');
+              return;
+            }
+
+            const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8')).total;
+            const fmt = (n) => `${n.toFixed(1)}%`;
+
+            const icon = (pct) => pct >= 80 ? '🟢' : pct >= 60 ? '🟡' : '🔴';
+
+            const stmts  = summary.statements.pct;
+            const branch = summary.branches.pct;
+            const funcs  = summary.functions.pct;
+            const lines  = summary.lines.pct;
+
+            const body = [
+              '## 📈 Coverage Report',
+              '',
+              `| Métrica | Cobertura | |`,
+              `|---------|-----------|---|`,
+              `| Statements | ${fmt(stmts)}  | ${icon(stmts)}  |`,
+              `| Branches   | ${fmt(branch)} | ${icon(branch)} |`,
+              `| Functions  | ${fmt(funcs)}  | ${icon(funcs)}  |`,
+              `| Lines      | ${fmt(lines)}  | ${icon(lines)}  |`,
+              '',
+              `> Node.js ${{ env.NODE_VERSION }} · commit \`${{ github.sha }}\``,
+            ].join('\n');
+
+            // Atualiza comentário existente ou cria um novo (evita spam de comentários)
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c =>
+              c.user.login === 'github-actions[bot]' &&
+              c.body.startsWith('## 📈 Coverage Report')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner:      context.repo.owner,
+                repo:       context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner:        context.repo.owner,
+                repo:         context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
 
       - name: 📦 Upload coverage (para comparação futura)
         if: always()

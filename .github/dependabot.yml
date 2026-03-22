@@ -83,8 +83,21 @@ updates:
         update-types: ["version-update:semver-major"]
 
   # ── GitHub Actions ───────────────────────────────────────────────────────────
+  # "directories" (plural) cobre workflows E todas as composite actions.
+  # O Dependabot só varre "directory: /" para .github/workflows/*.yml;
+  # composite actions em .github/actions/*/action.yml precisam de entrada explícita.
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories:
+      - "/"                                        # .github/workflows/
+      - "/.github/actions/angular-build"
+      - "/.github/actions/deploy-summary"
+      - "/.github/actions/generate-env-file"
+      - "/.github/actions/health-check"
+      - "/.github/actions/register-deployment"
+      - "/.github/actions/setup-deps"
+      - "/.github/actions/snapshot-prev-version"
+      - "/.github/actions/vercel-build-output"
+      - "/.github/actions/vercel-deploy"
     schedule:
       interval: "monthly"
       day: "monday"
