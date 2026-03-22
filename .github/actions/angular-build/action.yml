@@ -12,6 +12,13 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: 💾 Cache Angular build
+      uses: actions/cache@v4
+      with:
+        path: .angular/cache
+        key: angular-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+        restore-keys: angular-${{ runner.os }}-
+
     - name: 🏗️ Build Angular — ${{ inputs.label }}
       shell: bash
       run: |
