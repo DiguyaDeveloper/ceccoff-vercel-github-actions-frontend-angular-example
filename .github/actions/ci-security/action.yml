@@ -2,14 +2,15 @@
 # ║  🔒 Composite Action: ci-security                                          ║
 # ║                                                                              ║
 # ║  npm audit para dependências de produção.                                  ║
-# ║  Inclui checkout e setup internamente.                                     ║
+# ║  IMPORTANTE: actions/checkout deve rodar ANTES desta action no job         ║
+# ║  (actions locais só são carregadas após o repo estar disponível)           ║
 # ║  Input audit-level permite ajuste por contexto:                            ║
 # ║    · 'high'     → pipeline principal e PRs (padrão)                        ║
 # ║    · 'critical' → hotfix (não bloquear em HIGH para emergências)           ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 name: 'CI — Security Audit'
-description: 'npm audit --omit=dev. Inclui checkout e setup internamente.'
+description: 'npm audit --omit=dev. Requer actions/checkout antes no job chamador.'
 
 inputs:
   node-version:
@@ -25,9 +26,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: ⬇️ Checkout
-      uses: actions/checkout@v6
-
     - name: 🟢 Setup Node.js ${{ inputs.node-version }}
       uses: actions/setup-node@v6
       with:

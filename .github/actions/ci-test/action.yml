@@ -1,12 +1,13 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  🧪 Composite Action: ci-test                                              ║
 # ║                                                                              ║
-# ║  Jest + cobertura. Inclui checkout e setup internamente.                   ║
-# ║  Opcionalmente: upload de artifact e comentário de coverage no PR.         ║
+# ║  Jest + cobertura. Upload de artifact e comentário de coverage no PR.      ║
+# ║  IMPORTANTE: actions/checkout deve rodar ANTES desta action no job         ║
+# ║  (actions locais só são carregadas após o repo estar disponível)           ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 name: 'CI — Testes'
-description: 'Jest + coverage. Inclui checkout e setup internamente.'
+description: 'Jest + coverage. Requer actions/checkout antes no job chamador.'
 
 inputs:
   node-version:
@@ -37,9 +38,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: ⬇️ Checkout
-      uses: actions/checkout@v6
-
     - name: 🟢 Setup Node.js ${{ inputs.node-version }}
       uses: actions/setup-node@v6
       with:
